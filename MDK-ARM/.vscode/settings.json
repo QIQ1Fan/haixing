@@ -1,0 +1,7 @@
+{
+    // 本工程源码统一按 UTF-8 读写。
+    // 不加这两项时，VS Code 在中文 Windows 上可能按 GBK 解码 UTF-8 文件，
+    // 中文注释显示为乱码；一旦保存，乱码会被永久写回文件（且可能丢字节）。
+    "files.encoding": "utf8",
+    "files.autoGuessEncoding": false
+}
