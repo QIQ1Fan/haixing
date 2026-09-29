@@ -26,28 +26,37 @@
 /* ==========================================================================
  * 本文件在工程里的位置：全局唯一的"调度者"
  *
- *   main.c 负责两件事：
- *     1. 开机时按正确顺序初始化所有模块（顺序有讲究，见下面的说明）
+ *   main.c 只做两件事：
+ *     1. 开机时按正确顺序初始化所有模块（顺序有讲究，见下面每一步的注释）
  *     2. 跑一个 10ms 节拍的主循环，把周期性任务和串口命令串起来
  *
- *   它自己不做任何硬件操作，所有活儿都交给 bsp_* 模块。
- *   这样分工的好处是：以后加 PID 循迹逻辑，只改主循环里那一段，
- *   底层驱动一行都不用动。
+ *   它自己不做任何控制运算，也不碰任何寄存器 —— 所有活儿都交给
+ *   下面的模块。这样分工的好处是：想改控制策略只动 app_car.c，
+ *   想改界面只动 app_menu.c，底层驱动一行都不用动。
  *
- *   主循环的数据流：
+ *   主循环（每 10ms 一拍，名义值；实际值由 bsp_encoder / app_car 自己量）：
  *
- *     ┌─ 每 10ms ────────────────────────────────────────┐
- *     │   BSP_Encoder_Update()  采样一次编码器计数        │
- *     │   BSP_Key_Scan()        推进一次按键状态机        │
- *     │   BSP_Buzzer_Poll()     检查非阻塞鸣叫是否该关声  │
- *     └──────────────────────────────────────────────────┘
- *     ┌─ 每轮都查 ───────────────────────────────────────┐
- *     │   BSP_UART_GetChar()    收到字符就跑对应自检      │
- *     └──────────────────────────────────────────────────┘
+ *     ┌──────────────────────────────────────────────────────────┐
+ *     │ ① BSP_Encoder_Update()  采样编码器计数 → 转速/里程        │
+ *     │ ② BSP_Key_Scan()        推进按键状态机 → 短按/长按/连发   │
+ *     │ ③ BSP_Buzzer_Poll()     到点关掉非阻塞鸣叫               │
+ *     │ ④ APP_Car_Update()      ★ 循迹控制律：误差 → PID → 差速  │
+ *     │ ⑤ APP_Leg_Update()      支撑脚角度斜坡（没在动就立刻返回）│
+ *     │ ⑥ APP_Menu_Update()     按键处理 + OLED 刷新（自带节流） │
+ *     └──────────────────────────────────────────────────────────┘
+ *     ┌──────────────────── 每轮循环都查一下 ────────────────────┐
+ *     │ BSP_UART_GetChar()  收到字符就跑对应的自检/命令           │
+ *     └──────────────────────────────────────────────────────────┘
  *
- *   为什么这三件事必须严格 10ms 一次：
- *     · 编码器测速是"增量 ÷ 采样周期"，周期不准转速就不准
- *     · 按键的长按 1 秒 = 100 次 × 10ms，周期不准时间阈值就错
+ *   ★ 为什么这几件事必须挂在同一个节拍上：
+ *     · 控制环的相位滞后直接由采样周期决定，周期不定就会画龙
+ *     · 按键的长按 0.6 秒 = 60 次 × 10ms，周期不准时间阈值就错
+ *     · 编码器测速是"增量 ÷ 时间"，周期不准转速就成比例地错
+ *
+ *   ★ 而"某一拍被 OLED 刷屏拖长了"并不致命：bsp_encoder 和 app_car
+ *     各自用 HAL_GetTick() 量出真实的 dt，按真实时间换算。
+ *     真正要避免的是"平均周期"被拖长，那才是真的控制变差 ——
+ *     所以菜单刷新做了节流，而且只刷变化的那几页。
  * ========================================================================== */
 #include "bsp_gpio.h"
 #include "bsp_motor.h"
@@ -59,6 +68,12 @@
 #include "bsp_oled.h"
 #include "bsp_uart.h"
 #include "bsp_test.h"
+#include "bsp_pid.h"
+
+#include "app_param.h"
+#include "app_leg.h"
+#include "app_car.h"
+#include "app_menu.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -83,16 +98,15 @@
 /* --------------------------------------------------------------------------
  * 主循环节拍
  *
- * MAIN_TICK_MS 与 bsp_config.h 里的这些值必须一致，改动时要一起改：
- *     ENC_SAMPLE_PERIOD_MS   编码器测速的采样周期
- *     KEY_SCAN_PERIOD_MS     按键消抖与长按的计时基准
- * 三者不一致的话，转速会成比例地错，按键的时间阈值也会失准。
+ * ★ MAIN_TICK_MS 不在这里定义，它在 bsp_config.h 里 —— 因为它必须和
+ *   CTRL_PERIOD_MS（控制周期）、ENC_SAMPLE_PERIOD_MS（测速名义周期）、
+ *   KEY_SCAN_PERIOD_MS（按键计时基准）完全相等，而 bsp_config.h 里
+ *   有一道 #if 编译期检查替我们盯着这件事，不相等直接编译报错。
+ *   定义在这里的话那道检查就管不到了。
  *
  * s_next_tick 记录"上一拍是什么时候"，主循环拿当前时间去比。
  * -------------------------------------------------------------------------- */
 static uint32_t s_next_tick = 0u;
-
-#define MAIN_TICK_MS    10u
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -103,6 +117,41 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+  * @brief  开机自报家门：把关键信息打到串口
+  * @note   出问题时这一屏信息往往比任何调试手段都有用 ——
+  *         比如 Clocks 不对说明晶振没起振（会退回内部 RC，PWM 频率全变），
+  *         Params 显示 default 说明 Flash 里没有有效参数。
+  */
+static void main_boot_report(void)
+{
+    BSP_UART_SendString("\r\n\r\n=================================\r\n");
+    BSP_UART_SendString("  haixing line-follower  booting\r\n");
+    BSP_UART_SendString("=================================\r\n");
+
+    BSP_UART_Printf("SYSCLK = %u Hz\r\n", (unsigned int)HAL_RCC_GetSysClockFreq());
+    BSP_UART_Printf("Control period = %u ms\r\n", (unsigned int)MAIN_TICK_MS);
+    BSP_UART_Printf("Param flash save = %s\r\n",
+                    (PARAM_FLASH_ENABLE != 0) ? "enabled" : "disabled");
+
+    /* 把当前生效的参数打一份出来。整定过程中对比"上次是什么值"
+       靠的就是它 —— 屏幕上只能看一页，这里一次全打出来 */
+    APP_Param_Print();
+
+    BSP_UART_SendString("[boot] init done.\r\n");
+    BSP_UART_SendString("[boot] OLED keys: OK=menu/enter  BACK=back/STOP  +/-=select\r\n");
+
+    /* ★ 开机直接把自检菜单打出来，而不是"让用户敲 ? 才显示"。
+       理由很实际：调试第一步就是怀疑"串口到底通不通"，
+       如果菜单要靠收字符才出现，那么 RX 没接好的人和"命令敲错了"的人
+       看到的现象一模一样 —— 都是一片沉默，没法往下走。
+       打出来之后，即使 RX 完全没接，也能照着菜单继续验硬件。
+       另外顺带把"键盘要半角、命令要 ASCII"这件事说清楚。 */
+    BSP_UART_SendString("[boot] 菜单在下面。若敲命令没反应，先看 PA10(RX) 是否接了适配器的 TX。\r\n");
+    BSP_UART_SendString("[boot] 注意：命令行里的 ? 和字母必须是【半角】ASCII，全角字符收不到。\r\n");
+    BSP_Test_ShowMenu();
+}
 
 /* USER CODE END 0 */
 
@@ -138,16 +187,26 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   /* ==================================================================
-   * BSP 初始化。顺序有讲究：
-   *   1) 串口最先 —— 后面任何模块出问题，报错信息才打得出来
-   *   2) 电机 PWM 通道先起、STBY 后使能 —— 避免上电瞬间电机乱冲
-   *   3) OLED 放最后 —— 它自带 100ms 上电等待，不拖累前面
+   * 初始化顺序，每一句的位置都有理由：
+   *
+   *   1) BSP_UART_Init()    —— 最先。后面任何模块出问题，报错才打得出来
+   *   2) BSP_GPIO_Init()    —— 所有纯 GPIO 引脚的底座，电机方向/循迹/按键
+   *                            都靠它，必须在电机和循迹之前
+   *   3) BSP_Buzzer_Init()  —— 上电先保证蜂鸣器是静音的
+   *   4) BSP_Key_Init()     —— 按键状态清零
+   *   5) BSP_Track_Init()   —— 循迹（引脚已在第 2 步配好）
+   *   6) BSP_Encoder_Init() —— 编码器，给循迹控制提供转速
+   *   7) BSP_Servo_Init()   —— 支撑脚舵机的软件 PWM 时基 + 中断
+   *   8) BSP_Motor_Init()   —— 电机 PWM 起好、STBY 最后才使能，
+   *                            避免上电瞬间电机乱冲
+   *   9) BSP_OLED_Init()    —— 它自带 100ms 上电等待，放最后不拖累别人
+   *  10) APP_Param_Init()   —— 读 Flash 参数。★ 必须在 Car/Leg 之前，
+   *                            它们要用参数决定初始行为和初始姿态
+   *  11) APP_Leg_Init()     —— 支撑脚摆到"收起"位
+   *  12) APP_Car_Init()     —— 建 PID、清状态（不动电机）
+   *  13) APP_Menu_Init()    —— 界面，最后，它要往屏幕上画第一帧
    * ================================================================== */
   BSP_UART_Init();
-  BSP_UART_SendString("\r\n\r\n=================================\r\n");
-  BSP_UART_SendString("  haixing line-follower  booting\r\n");
-  BSP_UART_SendString("=================================\r\n");
-
   BSP_GPIO_Init();
   BSP_Buzzer_Init();
   BSP_Key_Init();
@@ -157,15 +216,17 @@ int main(void)
   BSP_Motor_Init();
   BSP_OLED_Init();
 
-  /* 舵机回中位，电机保持停止 */
-  BSP_Servo_SetAngle(0.0f);
-  BSP_Motor_Stop();
+  APP_Param_Init();
+  APP_Leg_Init();
+  APP_Car_Init();
+  APP_Menu_Init();
 
-  BSP_UART_Printf("SYSCLK = %u Hz\r\n", (unsigned int)HAL_RCC_GetSysClockFreq());
-  BSP_UART_SendString("所有外设初始化完成\r\n");
+  /* 确保上电是"停着、静音、收起支撑脚"的安全状态。
+     参数里万一存了个离谱的值（比如 BASESPD 很大），也不会在上电瞬间动车 */
+  APP_Car_Stop();
 
   BSP_Buzzer_Beep(120u);
-  BSP_Test_ShowMenu();
+  main_boot_report();
 
   s_next_tick = HAL_GetTick();
 
@@ -188,7 +249,7 @@ int main(void)
      *
      * 这是"软节拍器"：不依赖定时器中断，而是每轮循环看一眼时间够没够。
      * 好处是简单、不用碰中断优先级；代价是如果某一轮循环耗时超过 10ms
-     * （比如某个阻塞操作），这一拍就会被拉长。
+     * （OLED 刷新就是这么个情况），这一拍就会被拉长。
      *
      * ★ 用 (now - s_next_tick) 而不是 (now >= s_next_tick)：
      *   HAL_GetTick() 是 32 位毫秒，49.7 天会回绕归零。
@@ -196,37 +257,28 @@ int main(void)
      *
      * 这里直接 s_next_tick = now 而不是 += 10，是刻意的：
      * 万一某轮超时了，让下一拍从"现在"重新起算，不会越积越多的追赶。
+     * 代价是平均周期会略大于 10ms —— 没关系，编码器测速和 PID
+     * 都用实测 dt，按真实时间换算，读数依然准。
      * ------------------------------------------------------------------ */
     now = HAL_GetTick();
     if ((uint32_t)(now - s_next_tick) >= MAIN_TICK_MS) {
       s_next_tick = now;
 
-      BSP_Encoder_Update();   /* 读编码器计数差 —— 速度反馈的来源 */
-      BSP_Key_Scan();         /* 推进按键状态机，产生短按/长按/连发事件 */
-      BSP_Buzzer_Poll();      /* 检查非阻塞鸣叫是否到点该关声 */
+      BSP_Encoder_Update();   /* ① 读编码器计数差 —— 速度反馈的来源 */
+      BSP_Key_Scan();         /* ② 推进按键状态机，产生短按/长按/连发事件 */
+      BSP_Buzzer_Poll();      /* ③ 检查非阻塞鸣叫是否到点该关声 */
+      APP_Car_Update();       /* ④ ★ 循迹控制律：误差 → PID → 左右轮差速 */
+      APP_Leg_Update();       /* ⑤ 支撑脚角度斜坡 */
+      APP_Menu_Update();      /* ⑥ 按键处理 + OLED 刷新（自带节流） */
     }
 
     /* ------------------------------------------------------------------
-     * 串口命令：收到一个字符就跑对应的底层自检
+     * 串口命令：收到一个字符就跑对应的自检 / 调参命令
      * 非阻塞读，没数据时立刻返回，不会拖慢上面的 10ms 节拍
      * ------------------------------------------------------------------ */
     if (BSP_UART_GetChar(&ch) != 0u) {
       BSP_Test_RunCommand((char)ch);
     }
-
-    /* ==================================================================
-     * 底层全部验证通过后，把上面那段自检调用换掉，换成循迹逻辑：
-     *
-     *   float err = BSP_Track_GetErrorNorm();     // 1. 读位置误差
-     *   float steer = pid_turn(err);              // 2. 转向环 PID
-     *   int16_t base = 1800;                      // 3. 基础速度
-     *
-     *   BSP_Motor_SetSpeed(base - steer, base + steer);   // 差速转向
-     *   // 或者 BSP_Servo_SetAngle(steer);                // 舵机转向
-     *
-     * 再往里加一层速度环：用 BSP_Encoder_GetRPM() 做反馈，
-     * 把 base 换成"速度环的输出"，就是标准的双环控制了。
-     * ================================================================== */
   }
   /* USER CODE END 3 */
 }

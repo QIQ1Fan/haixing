@@ -7,7 +7,7 @@
   *   初始化： main.c → BSP_GPIO_Init() → 一次配好全部纯 GPIO 引脚
   *
   *   运行期： bsp_motor ──写──► BSP_GPIO_WriteMotorDir / WriteStby ──► 方向/使能脚
-  *            bsp_track ──读──► BSP_GPIO_ReadTrackRaw ──► 六路探头电平
+  *            bsp_track ──读──► BSP_GPIO_ReadTrackRaw ──► 八路探头电平
   *            bsp_key   ──读──► BSP_GPIO_ReadKeyRaw   ──► 四个按键电平
   *
   * 【为什么要单独有这一层】
@@ -26,14 +26,14 @@
  * 想加第 7 路探头，只要在这里加一项、改 bsp_config.h 的 TRACK_SENSOR_NUM。
  * ========================================================================== */
 
-/* 六路循迹：索引 0..5 对应车头从左到右 */
+/* 八路循迹：索引 0..7 对应车头从左到右 */
 static GPIO_TypeDef *const s_track_port[TRACK_SENSOR_NUM] = {
-    TRACK0_PORT, TRACK1_PORT, TRACK2_PORT,
-    TRACK3_PORT, TRACK4_PORT, TRACK5_PORT,
+    TRACK0_PORT, TRACK1_PORT, TRACK2_PORT, TRACK3_PORT,
+    TRACK4_PORT, TRACK5_PORT, TRACK6_PORT, TRACK7_PORT,
 };
 static const uint16_t s_track_pin[TRACK_SENSOR_NUM] = {
-    TRACK0_PIN, TRACK1_PIN, TRACK2_PIN,
-    TRACK3_PIN, TRACK4_PIN, TRACK5_PIN,
+    TRACK0_PIN, TRACK1_PIN, TRACK2_PIN, TRACK3_PIN,
+    TRACK4_PIN, TRACK5_PIN, TRACK6_PIN, TRACK7_PIN,
 };
 
 /* 四路按键。★ 顺序必须与 bsp_key.h 的 BSP_KeyId_t 枚举严格一致，
@@ -86,7 +86,7 @@ void BSP_GPIO_Init(void)
     gpio.Pin = MOTOR_STBY_PIN;
     HAL_GPIO_Init(MOTOR_STBY_PORT, &gpio);
 
-    /* ---- 2. 六路循迹：上拉输入 ----
+    /* ---- 2. 八路循迹：上拉输入 ----
        上拉的作用是给引脚一个确定的默认电平。探头没接或线断了时读到高电平
        （不压线），而不是随机跳变 —— 这样故障表现为"完全循不到线"，
        比"随机报线"好查得多。 */

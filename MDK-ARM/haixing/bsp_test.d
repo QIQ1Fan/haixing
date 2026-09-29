@@ -38,3 +38,7 @@ haixing\bsp_test.o: ../Core/Inc/bsp_key.h
 haixing\bsp_test.o: ../Core/Inc/bsp_buzzer.h
 haixing\bsp_test.o: ../Core/Inc/bsp_oled.h
 haixing\bsp_test.o: ../Core/Inc/bsp_uart.h
+haixing\bsp_test.o: ../Core/Inc/app_param.h
+haixing\bsp_test.o: ../Core/Inc/app_car.h
+haixing\bsp_test.o: ../Core/Inc/app_leg.h
+haixing\bsp_test.o: ../Core/Inc/app_menu.h

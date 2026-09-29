@@ -1,0 +1,530 @@
+/**
+  ******************************************************************************
+  * @file    app_param.c
+  * @brief   可调参数集中管理 + Flash 掉电保存
+  *
+  * 【数据流】
+  *   上电： APP_Param_Init()
+  *           ├─ APP_Param_Load()    读 Flash 最后一页
+  *           │     ├─ magic 不对 / 版本不对 / 校验和不对 → 返回 0
+  *           │     └─ 全对 → memcpy 到 g_param，返回 1
+  *           └─ 返回 0 时 → APP_Param_ResetDefault() 用出厂值
+  *                 └─ 最后 APP_Param_Clamp() 兜底限幅
+  *
+  *   调参： 菜单/串口 → APP_Param_SetByIndex() → 夹到合法范围 → 写进 g_param
+  *           → 置脏标记 → （用户按"保存"时）APP_Param_Save() 写回 Flash
+  *
+  *   使用： app_car 每个控制周期直接读 g_param.xxx，所以改完下一拍就生效
+  *
+  * 【★ 为什么参数表要和结构体分开写两遍】
+  *   一份是"数据"（结构体字段），一份是"元数据"（名字/步长/上下限）。
+  *   C 语言没有反射，做不到"自动发现字段"，只能手写这张表。
+  *   代价是加参数要改两处，收益是菜单、限幅、串口打印全部自动跟着走 ——
+  *   这个交易很划算。表里的 offset 用 offsetof() 算，写错字段名会编译报错，
+  *   所以不会出现"表里指到了别的字段"这种隐蔽 bug。
+  *
+  * 【★ 校验和为什么能防住乱码】
+  *   Flash 擦除后的值是 0xFF，第一次上电时整页都是 0xFF：
+  *     magic 读到 0xFFFFFFFF ≠ PARAM_MAGIC → 直接判无效 → 用默认值。
+  *   如果只校验 magic 就写回去、不校验 checksum，那么 Flash 因为电压不稳
+  *   写坏几个 bit 时，参数会变成一堆离谱的值（比如 base_speed = 30000），
+  *   车一上电就窜出去。checksum 就是为了拦住这种情况。
+  ******************************************************************************
+  */
+#include "app_param.h"
+#include "bsp_uart.h"
+
+#include <stddef.h>     /* offsetof */
+#include <string.h>     /* memcpy / memcmp / memset */
+
+/* ==========================================================================
+ * 全局参数实例
+ * ========================================================================== */
+APP_Param_t g_param;
+
+/* ==========================================================================
+ * 出厂默认值
+ * --------------------------------------------------------------------------
+ *   这份数值是"能跑起来"的起点，不是最优值。整定顺序见 README：
+ *     先只给 KP（KI=0, KD=0）把车调得不画龙，再加 KD 压住摆动，
+ *     最后（真的有必要时）才加一点点 KI 消稳态偏移。
+ * ========================================================================== */
+#define DEF_TURN_KP         1200.0f     /* 误差 1.0（最边上）→ 转向量 1200 */
+#define DEF_TURN_KI         0.0f        /* 循迹一般不需要积分 */
+#define DEF_TURN_KD         180.0f      /* 先用小一点的 D，避免传感器量化噪声被放大 */
+#define DEF_DEAD_ZONE       0.08f       /* 归一化误差死区，约等于半路的宽度 */
+
+#define DEF_BASE_SPEED      1300        /* 满量程 3599，约 36%，桌面赛道够快也够稳 */
+#define DEF_TURN_LIMIT      1500        /* 转向量上限：最狠时左右差 3000 */
+#define DEF_INNER_MIN_SPD   250         /* 内轮最低速，防止急弯内侧轮停转导致顿挫 */
+#define DEF_RAMP_MS         400         /* 0 → 全速用 0.4 秒，起步不打滑 */
+#define DEF_STEER_INV       0           /* 转向差速方向不对时改 1 */
+/* ★ 电机转向取反的出厂默认值直接取自 bsp_config.h 的宏。
+   这样"改宏重编"和"在菜单里拨"共用同一个初始值，两套用法不会打架 */
+#define DEF_MOTOR_L_INV     MOTOR_L_INVERT
+#define DEF_MOTOR_R_INV     MOTOR_R_INVERT
+
+#define DEF_LOST_TURN       1200        /* 丢线时按原方向猛打 */
+/* ★ 默认 0 = 丢线不停车，一直朝最后看到线的方向找下去，直到人工停车。
+ *   调试阶段（车还跟不上线）这是唯一好用的设置：
+ *   否则"走 0.8 秒就刹车"会让人不停按 START，根本看不出控制效果。
+ *   循迹整定好之后，想让它冲出赛道时自动停，改成 800~1500 即可。 */
+#define DEF_LOST_STOP_MS    0
+#define DEF_CROSS_HOLD_MS   260         /* 十字路口保持直行 0.26 秒通过 */
+
+/* ★ 默认 0 = 关闭堵转保护。
+ *   它会判"给了占空比、编码器却一个计数都没有" —— 编码器如果还没接线，
+ *   每一次跑车都会在 1.5 秒后被误判成堵转而刹车，
+ *   现象就是"走一段停一段"，非常容易被误当成控制问题。
+ *   等串口敲 6 确认编码器读数正常之后，再打开（1000~2000 比较合适）。 */
+#define DEF_STALL_MS        0
+
+/* ★ 支撑脚行程默认给足 180°（0 → 180 走满舵机的整个行程）。
+ *   这两个值必须实车标定：
+ *     · 如果某一端听到舵机"嗡嗡"顶死不走，把那一端往回收 5~10 度
+ *     · 菜单 TUNE PARAMS 里改 LEGUP / LEGDN 能立刻看到脚动，调完按 S 存 Flash */
+#define DEF_LEG_UP_DEG      0           /* 全收起 */
+#define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
+
+/* ==========================================================================
+ * 参数描述表
+ * --------------------------------------------------------------------------
+ *   field        name        type       dec  step    min     max
+ *   名字最好 <= 8 个字符，否则 128 像素一行放不下（一行 21 个 6x8 字符）；
+ *   显示时前面还要留 2 个字符给光标 ">"。
+ * ========================================================================== */
+const APP_ParamItem_t g_param_table[] = {
+    /* ================= 装车第一步：先把方向弄对 =================
+     * ★ 这三项放在表的最前面是有意的。
+     *   参数列表一屏只显示 6 行，其余要按"下移"翻 —— 而"电机转向对不对"
+     *   是每次装车第一个要解决的问题（而且错了车根本不走直线）。
+     *   把方向开关放在第一屏，开机进 TUNE PARAMS 直接就能看到、能改，
+     *   不用先翻十下才找到。
+     *
+     *   判断顺序（一定要用测试 4 验，别靠猜）：
+     *     1) 先看 MLINV / MRINV —— 两个轮子是不是都往前转
+     *        命令两轮都前进时车原地打转 = 有一个轮子的正负极接反了
+     *     2) 两个轮子都对了，再上线跑 —— 如果越纠越偏，才动 STEERINV
+     *        （它管的是"看到线在左边该往左拐"这个方向，不是电机本身） */
+    { "MLINV",    offsetof(APP_Param_t, motor_l_inv),  PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
+    { "MRINV",    offsetof(APP_Param_t, motor_r_inv),  PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
+    { "STEERINV", offsetof(APP_Param_t, steer_inv),    PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
+    /* ------------------------------ 转向环 ------------------------------ */
+    { "KP",       offsetof(APP_Param_t, turn_kp),      PTYPE_F32,  0,  50.0f,    0.0f,  4000.0f },
+    { "KI",       offsetof(APP_Param_t, turn_ki),      PTYPE_F32,  0,   5.0f,    0.0f,   500.0f },
+    { "KD",       offsetof(APP_Param_t, turn_kd),      PTYPE_F32,  0,  20.0f,    0.0f,  2000.0f },
+    { "DEADZONE", offsetof(APP_Param_t, dead_zone),    PTYPE_F32,  2,   0.02f,   0.0f,     0.50f },
+    /* ------------------------------- 行进 ------------------------------- */
+    { "BASESPD",  offsetof(APP_Param_t, base_speed),   PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
+    { "TURNMAX",  offsetof(APP_Param_t, turn_limit),   PTYPE_I16,  0,  50.0f,  100.0f,  3599.0f },
+    { "MINSPD",   offsetof(APP_Param_t, inner_min_spd),PTYPE_I16,  0,  50.0f,    0.0f,  2000.0f },
+    { "RAMPms",   offsetof(APP_Param_t, ramp_ms),      PTYPE_U16,  0,  50.0f,    0.0f,  3000.0f },
+    /* ------------------------------- 丢线 ------------------------------- */
+    { "LOSTTRN",  offsetof(APP_Param_t, lost_turn),    PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
+    { "LOSTms",   offsetof(APP_Param_t, lost_stop_ms), PTYPE_U16,  0,  50.0f,    0.0f,  5000.0f },
+    /* ------------------------------- 十字 ------------------------------- */
+    { "CROSSms",  offsetof(APP_Param_t, cross_hold_ms),PTYPE_U16,  0,  50.0f,    0.0f,  2000.0f },
+    /* ------------------------------- 保护 ------------------------------- */
+    { "STALLms",  offsetof(APP_Param_t, stall_ms),     PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
+    /* ------------------------------ 支撑脚 ------------------------------ */
+    { "LEGUP",    offsetof(APP_Param_t, leg_up_deg),   PTYPE_U8,   0,   5.0f,    0.0f,   180.0f },
+    { "LEGDN",    offsetof(APP_Param_t, leg_down_deg), PTYPE_U8,   0,   5.0f,    0.0f,   180.0f },
+};
+
+const uint8_t g_param_count = (uint8_t)(sizeof(g_param_table) / sizeof(g_param_table[0]));
+
+/* 脏标记：参数被改过但还没保存回 Flash */
+static uint8_t s_dirty = 0u;
+
+/* ==========================================================================
+ * 内部工具
+ * ========================================================================== */
+
+/** 取字段地址（用字节偏移算，表里存的就是偏移） */
+static void *param_field_ptr(APP_Param_t *p, const APP_ParamItem_t *item)
+{
+    return (void *)((uint8_t *)p + item->offset);
+}
+
+/** 按类型读一个字段并统一转成 float */
+static float param_read_field(const APP_Param_t *p, const APP_ParamItem_t *item)
+{
+    const void *addr = (const void *)((const uint8_t *)p + item->offset);
+
+    switch (item->type) {
+    case PTYPE_F32: return *(const float   *)addr;
+    case PTYPE_I16: return (float)(*(const int16_t *)addr);
+    case PTYPE_U16: return (float)(*(const uint16_t *)addr);
+    case PTYPE_U8:  return (float)(*(const uint8_t  *)addr);
+    default:        return 0.0f;
+    }
+}
+
+/**
+  * @brief  按类型写一个字段
+  * @note   ★ 先夹到参数表的范围再写。这里是"最后一道闸"：
+  *         任何调用者（菜单、串口）都不需要自己记得限幅
+  */
+static void param_write_field(APP_Param_t *p, const APP_ParamItem_t *item, float v)
+{
+    void *addr = param_field_ptr(p, item);
+
+    if (v < item->vmin) { v = item->vmin; }
+    if (v > item->vmax) { v = item->vmax; }
+
+    switch (item->type) {
+    case PTYPE_F32:
+        *(float *)addr = v;
+        break;
+    case PTYPE_I16:
+        /* +0.5 / -0.5 是为了四舍五入而不是直接截断：
+           串口敲 "1300.7" 时截断会变成 1300，四舍五入也是 1300，
+           但敲 "1299.9" 时截断会变成 1299，看着像丢了一位 */
+        *(int16_t *)addr = (int16_t)((v >= 0.0f) ? (v + 0.5f) : (v - 0.5f));
+        break;
+    case PTYPE_U16:
+        *(uint16_t *)addr = (uint16_t)(v + 0.5f);
+        break;
+    case PTYPE_U8:
+        *(uint8_t *)addr = (uint8_t)(v + 0.5f);
+        break;
+    default:
+        break;
+    }
+}
+
+/** 把出厂默认值逐字段填进去。
+ *  ★ 先 memset 再逐字段赋值，而不是直接结构体赋值：
+ *    这样结构体内部的填充字节一定是 0，校验和才算得稳。 */
+static void param_fill_default(APP_Param_t *p)
+{
+    memset(p, 0, sizeof(*p));
+
+    p->magic   = PARAM_MAGIC;
+    p->version = (uint16_t)PARAM_VERSION;
+
+    p->turn_kp = DEF_TURN_KP;
+    p->turn_ki = DEF_TURN_KI;
+    p->turn_kd = DEF_TURN_KD;
+    p->dead_zone = DEF_DEAD_ZONE;
+
+    p->base_speed    = (int16_t)DEF_BASE_SPEED;
+    p->turn_limit    = (int16_t)DEF_TURN_LIMIT;
+    p->inner_min_spd = (int16_t)DEF_INNER_MIN_SPD;
+    p->ramp_ms       = (uint16_t)DEF_RAMP_MS;
+    p->steer_inv     = (uint8_t)DEF_STEER_INV;
+    p->motor_l_inv   = (uint8_t)DEF_MOTOR_L_INV;
+    p->motor_r_inv   = (uint8_t)DEF_MOTOR_R_INV;
+
+    p->lost_turn    = (int16_t)DEF_LOST_TURN;
+    p->lost_stop_ms = (uint16_t)DEF_LOST_STOP_MS;
+
+    p->cross_hold_ms = (uint16_t)DEF_CROSS_HOLD_MS;
+
+    p->stall_ms = (uint16_t)DEF_STALL_MS;
+
+    p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
+    p->leg_down_deg = (uint8_t)DEF_LEG_DOWN_DEG;
+
+    p->checksum = APP_Param_Checksum(p);
+}
+
+/* ==========================================================================
+ * 校验和
+ * ========================================================================== */
+
+uint16_t APP_Param_Checksum(const APP_Param_t *p)
+{
+    const uint8_t *b = (const uint8_t *)p;
+    uint32_t len = (uint32_t)offsetof(APP_Param_t, checksum);   /* 不含 checksum 本身 */
+    uint32_t sum = 0u;
+    uint32_t i;
+
+    /* 简单的加法校验（不是 CRC）。
+       对"整页被擦成 0xFF"和"个别 bit 翻转"这两种最常见的 Flash 事故
+       已经足够 —— 要的只是"拦住乱码"，不是防篡改。 */
+    for (i = 0u; i < len; i++) {
+        sum = (sum + (uint32_t)b[i]) & 0xFFFFu;
+    }
+
+    /* 取反后返回：这样"全 0"或"全 0xFF"的极端数据都不会碰巧通过 */
+    return (uint16_t)(~sum & 0xFFFFu);
+}
+
+/* ==========================================================================
+ * Flash 读写
+ * ========================================================================== */
+
+#if PARAM_FLASH_ENABLE
+
+/**
+  * @brief  把 g_param 写进 Flash 最后一页
+  * @retval 1 = 成功
+  *
+  * 【为什么全程不能被打断】
+  *   Flash 擦写期间 CPU 从 Flash 取指会被硬件暂停（F1 没有取指缓冲），
+  *   所以这个函数只能在"车停着"的时候调用。app_menu 里保存参数
+  *   只在待机状态开放，就是这个原因。
+  */
+static uint8_t param_flash_write(void)
+{
+    FLASH_EraseInitTypeDef erase = {0};
+    uint32_t page_err = 0xFFFFFFFFu;
+    const uint8_t *src = (const uint8_t *)&g_param;
+    uint32_t len = (uint32_t)sizeof(APP_Param_t);
+    uint32_t i;
+    uint8_t ok = 0u;
+
+    if (HAL_FLASH_Unlock() != HAL_OK) {
+        return 0u;
+    }
+
+    erase.TypeErase   = FLASH_TYPEERASE_PAGES;
+    erase.PageAddress = PARAM_FLASH_PAGE_ADDR;
+    erase.NbPages     = 1u;
+
+    /* ★ 整页擦除。擦之前要确认这一页不属于程序代码，
+       否则"保存参数"会把程序擦出一个洞。见 bsp_config.h 第 11 节的警告 */
+    if (HAL_FLASHEx_Erase(&erase, &page_err) == HAL_OK) {
+        ok = 1u;
+
+        /* F1 的 Flash 只能按"半字（16 位）"编程，所以两字节两字节地写 */
+        for (i = 0u; i < len; i += 2u) {
+            uint16_t hw;
+
+            if ((i + 1u) < len) {
+                hw = (uint16_t)((uint16_t)src[i] | ((uint16_t)src[i + 1u] << 8));
+            } else {
+                /* 结构体长度是奇数时的兜底（当前是偶数，走不到这里）：
+                   高字节补 0xFF，和 Flash 擦除态一致 */
+                hw = (uint16_t)((uint16_t)src[i] | 0xFF00u);
+            }
+
+            if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+                                  PARAM_FLASH_PAGE_ADDR + i,
+                                  (uint64_t)hw) != HAL_OK) {
+                ok = 0u;
+                break;
+            }
+        }
+    }
+
+    HAL_FLASH_Lock();
+
+    /* ★ 回读比对：写完不算完，要确认读回来的和想写的完全一致。
+       不过这一关就老老实实返回失败，让上层告诉用户"保存失败"，
+       而不是骗用户说存好了、下次上电却回到默认值 */
+    if (ok != 0u) {
+        ok = (memcmp((const void *)PARAM_FLASH_PAGE_ADDR, src, len) == 0) ? 1u : 0u;
+    }
+
+    return ok;
+}
+
+static uint8_t param_flash_read(APP_Param_t *out)
+{
+    /* Flash 是内存映射的，直接当普通内存读就行，不需要任何 HAL 调用 */
+    memcpy(out, (const void *)PARAM_FLASH_PAGE_ADDR, sizeof(APP_Param_t));
+    return 1u;
+}
+
+#endif /* PARAM_FLASH_ENABLE */
+
+/* ==========================================================================
+ * 对外接口
+ * ========================================================================== */
+
+void APP_Param_ResetDefault(void)
+{
+    param_fill_default(&g_param);
+    s_dirty = 1u;       /* 默认值和 Flash 里的旧值不一样，算"已修改" */
+}
+
+void APP_Param_Init(void)
+{
+    uint8_t loaded = 0u;
+
+#if PARAM_FLASH_ENABLE
+    loaded = APP_Param_Load();
+#endif
+
+    if (loaded == 0u) {
+        /* 第一次上电、Flash 被擦过、或者参数区损坏 —— 三种情况都走这里 */
+        APP_Param_ResetDefault();
+        s_dirty = 0u;   /* 默认值本来就没存过，不必显示 MODIFIED 去烦用户 */
+    }
+
+    APP_Param_Clamp();
+}
+
+void APP_Param_Clamp(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < g_param_count; i++) {
+        const APP_ParamItem_t *item = &g_param_table[i];
+        float v = param_read_field(&g_param, item);
+
+        /* 读出来再写回去，顺带完成"按参数表限幅"。
+           用 param_write_field 而不是自己写 switch，保证限幅规则只有一份 */
+        param_write_field(&g_param, item, v);
+    }
+
+    /* 结构体内的搬运字段也要保护：magic/version 被改坏的话，
+       下次上电会判为无效参数，白丢一次标定结果 */
+    g_param.magic   = PARAM_MAGIC;
+    g_param.version = (uint16_t)PARAM_VERSION;
+
+    /* 检查和不属于参数表，手动补 */
+    g_param.checksum = APP_Param_Checksum(&g_param);
+}
+
+uint8_t APP_Param_Load(void)
+{
+#if PARAM_FLASH_ENABLE
+    APP_Param_t tmp;
+
+    param_flash_read(&tmp);
+
+    if (tmp.magic != PARAM_MAGIC) {
+        return 0u;      /* 空片（全 0xFF）或别的程序留下的数据 */
+    }
+    if (tmp.version != (uint16_t)PARAM_VERSION) {
+        return 0u;      /* 结构体改过版本，老数据不再兼容 */
+    }
+    if (tmp.checksum != APP_Param_Checksum(&tmp)) {
+        return 0u;      /* 数据被写坏 */
+    }
+
+    g_param = tmp;
+    s_dirty = 0u;
+    return 1u;
+#else
+    return 0u;
+#endif
+}
+
+uint8_t APP_Param_Save(void)
+{
+#if PARAM_FLASH_ENABLE
+    uint8_t ok;
+
+    APP_Param_Clamp();                  /* 存之前再夹一次，防止存进非法值 */
+    g_param.magic   = PARAM_MAGIC;
+    g_param.version = (uint16_t)PARAM_VERSION;
+    g_param.checksum = APP_Param_Checksum(&g_param);
+
+    ok = param_flash_write();
+    if (ok != 0u) {
+        s_dirty = 0u;
+    }
+    return ok;
+#else
+    return 0u;
+#endif
+}
+
+uint8_t APP_Param_IsDirty(void)
+{
+    return s_dirty;
+}
+
+void APP_Param_MarkClean(void)
+{
+    s_dirty = 0u;
+}
+
+/* ==========================================================================
+ * 按索引读写
+ * ========================================================================== */
+
+float APP_Param_GetByIndex(uint8_t idx)
+{
+    if (idx >= g_param_count) {
+        return 0.0f;
+    }
+    return param_read_field(&g_param, &g_param_table[idx]);
+}
+
+void APP_Param_SetByIndex(uint8_t idx, float value)
+{
+    if (idx >= g_param_count) {
+        return;
+    }
+
+    param_write_field(&g_param, &g_param_table[idx], value);
+
+    /* 每改一次就重算校验和。这样"还没保存"的内存参数也是自洽的，
+       串口随时打印都不会看到一个对不上校验和的中间态 */
+    g_param.checksum = APP_Param_Checksum(&g_param);
+    s_dirty = 1u;
+}
+
+uint8_t APP_Param_FindByName(const char *name)
+{
+    uint8_t i;
+
+    if (name == NULL) {
+        return 0xFFu;
+    }
+
+    for (i = 0u; i < g_param_count; i++) {
+        const char *a = g_param_table[i].name;
+        const char *b = name;
+        uint8_t same = 1u;
+
+        /* 自己写字符串比较，不引 strcmp：
+           参数名都很短，而且这里要的是"忽略大小写"的宽松匹配
+           （串口里敲 kp 和 KP 都应该认） */
+        while ((*a != '\0') && (*b != '\0')) {
+            char ca = *a;
+            char cb = *b;
+
+            if ((ca >= 'a') && (ca <= 'z')) { ca = (char)(ca - 'a' + 'A'); }
+            if ((cb >= 'a') && (cb <= 'z')) { cb = (char)(cb - 'a' + 'A'); }
+
+            if (ca != cb) {
+                same = 0u;
+                break;
+            }
+            a++;
+            b++;
+        }
+
+        if ((same != 0u) && (*a == '\0') && (*b == '\0')) {
+            return i;
+        }
+    }
+
+    return 0xFFu;
+}
+
+void APP_Param_Print(void)
+{
+    uint8_t i;
+
+    BSP_UART_SendString("\r\n----- current parameters -----\r\n");
+
+    for (i = 0u; i < g_param_count; i++) {
+        const APP_ParamItem_t *item = &g_param_table[i];
+        float v = APP_Param_GetByIndex(i);
+
+        /* ★ 串口输出一律用 ASCII：armcc 会按主机区域设置解释源文件里的
+           多字节字符，某些中文字节对里恰好含 0x22/0x5C，会把字符串的
+           引号"吃掉"，报出莫名其妙的 missing closing quote。
+           注释里写中文没问题，字符串字面量里不要写。 */
+        if (item->type == PTYPE_F32) {
+            BSP_UART_Printf("  %-9s = %.*f   (step %.2f, range %.2f ~ %.2f)\r\n",
+                            item->name, (int)item->decimals, (double)v,
+                            (double)item->step, (double)item->vmin, (double)item->vmax);
+        } else {
+            BSP_UART_Printf("  %-9s = %d   (step %.0f, range %.0f ~ %.0f)\r\n",
+                            item->name, (int)(v + (v >= 0.0f ? 0.5f : -0.5f)),
+                            (double)item->step, (double)item->vmin, (double)item->vmax);
+        }
+    }
+
+    BSP_UART_Printf("  state: %s\r\n",
+                    (APP_Param_IsDirty() != 0u) ? "MODIFIED (not saved)" : "SAVED (=flash)");
+    BSP_UART_SendString("--------------------\r\n");
+}

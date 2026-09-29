@@ -59,8 +59,41 @@ void BSP_OLED_Init(void);
 /** @brief 清空显存（只改内存，不动屏幕） */
 void BSP_OLED_Clear(void);
 
-/** @brief 把显存整屏写入 OLED（这一步才真正耗时，约几毫秒） */
+/** @brief 把显存整屏写入 OLED（1024 字节，软件 I2C 下约 40~50ms） */
 void BSP_OLED_Refresh(void);
+
+/**
+  * @brief  ★ 只把"内容真的变过的页"写进 OLED —— 状态页刷新用这个
+  * @note   驱动内部保存了"屏幕上正显示着的那一帧"，刷新时逐页对比，
+  *         只把有差异的页区间发出去。所以调用者可以放心地写成：
+  *             清屏 → 按当前状态整帧重画 → BSP_OLED_RefreshDirty()
+  *         内容没变的页不会被重发 —— 这正是跑车时能省下刷屏时间的原因。
+  *
+  *         跑车时必须用它而不是 BSP_OLED_Refresh()：
+  *         整屏刷新要 40~50ms，每 10ms 刷一次会把主循环吃掉一半，
+  *         控制节拍全乱；而状态页通常只有 3~4 页会变，
+  *         一次只要 10~15ms，影响小得多。
+  */
+void BSP_OLED_RefreshDirty(void);
+
+/**
+  * @brief  刷新指定页区间（含两端），不看脏标记
+  * @param  first 起始页 0..7
+  * @param  last  结束页 first..7
+  */
+void BSP_OLED_RefreshPages(uint8_t first, uint8_t last);
+
+/**
+  * @brief  强制下一次 RefreshDirty 走整屏刷新
+  * @note   什么时候需要它：别人绕过了本驱动、直接把屏幕画花了
+  *         （bsp_test 的自检图案就是这种情况），而驱动内部保存的
+  *         "屏幕当前内容"还以为是旧画面。此时对比结果不可信，
+  *         必须整屏重来一次。
+  */
+void BSP_OLED_MarkAllDirty(void);
+
+/** @brief 是否有内容待刷新。返回 0 时调 RefreshDirty 是空操作（一次 I2C 都不发） */
+uint8_t BSP_OLED_HasDirty(void);
 
 /** @brief 清空显存并立即写屏 —— 每次重画一整帧的标准起手式 */
 void BSP_OLED_ClearAndRefresh(void);
@@ -106,6 +139,15 @@ void BSP_OLED_DrawHLine(uint8_t x, uint8_t page, uint8_t width);
   */
 void BSP_OLED_DrawBar(uint8_t x, uint8_t page, uint8_t width,
                       uint8_t height_pages, uint8_t percent);
+
+/**
+  * @brief  画一个方框：镂空或实心
+  * @param  filled 0 = 只画边框（循迹探头的"没压线"就用这个），
+  *                非 0 = 实心填充（"压线"用这个，一眼就能看出哪几路亮了）
+  * @note   探头状态显示就靠它：8 个并排的小方框，压线的填实
+  */
+void BSP_OLED_DrawBox(uint8_t x, uint8_t page, uint8_t width,
+                      uint8_t height_pages, uint8_t filled);
 
 /**
   * @brief  画一个占满全屏的自检图案

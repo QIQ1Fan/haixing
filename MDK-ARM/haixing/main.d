@@ -40,3 +40,8 @@ haixing\main.o: ../Core/Inc/bsp_buzzer.h
 haixing\main.o: ../Core/Inc/bsp_oled.h
 haixing\main.o: ../Core/Inc/bsp_uart.h
 haixing\main.o: ../Core/Inc/bsp_test.h
+haixing\main.o: ../Core/Inc/bsp_pid.h
+haixing\main.o: ../Core/Inc/app_param.h
+haixing\main.o: ../Core/Inc/app_leg.h
+haixing\main.o: ../Core/Inc/app_car.h
+haixing\main.o: ../Core/Inc/app_menu.h

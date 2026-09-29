@@ -38,6 +38,16 @@ static uint16_t s_last[ENC_NUM];    /* 上次采样时的原始计数值 */
 static int16_t  s_delta[ENC_NUM];   /* 本次采样周期内的增量 */
 static int32_t  s_total[ENC_NUM];   /* 累计计数（累加增量，不受回绕影响） */
 
+/* ★ 本模块和"写死采样周期"的做法最大的区别就在这两个变量：
+   转速 = 增量 ÷ 实际经过的时间，而不是 ÷ 名义上的 10ms。
+   主循环被 OLED 刷屏、串口打印拖慢时，实际间隔会从 10ms 变成 20~40ms，
+   如果还按 10ms 去除，转速会虚高好几倍 —— 而转速是要给人的眼睛看的，
+   虚高的读数会让人误判"车其实跑得很快"。
+   实测间隔还能让"控制节拍有没有被拖慢"变成一个可以观察的数字，
+   见 BSP_Encoder_GetDtMs()。 */
+static uint32_t s_last_tick = 0u;   /* 上次采样时的 HAL_GetTick() */
+static uint16_t s_dt_ms = 0u;       /* 上一次采样实际经过的毫秒数 */
+
 /* 方向反相标记，索引与 BSP_EncId_t 一一对应。
    编译期常量，用 #if 在编译时就定下来，不占运行期判断。 */
 static const uint8_t s_invert[ENC_NUM] = {
@@ -139,6 +149,9 @@ void BSP_Encoder_Init(void)
         s_delta[i] = 0;
         s_total[i] = 0;
     }
+
+    s_last_tick = HAL_GetTick();
+    s_dt_ms     = ENC_SAMPLE_PERIOD_MS;
 }
 
 /* ==========================================================================
@@ -148,10 +161,32 @@ void BSP_Encoder_Init(void)
 void BSP_Encoder_Update(void)
 {
     uint32_t i;
+    uint32_t now = HAL_GetTick();
+    uint32_t dt  = (uint32_t)(now - s_last_tick);   /* 无符号相减，回绕安全 */
 
-    /* ★ 这个函数必须每 ENC_SAMPLE_PERIOD_MS 被调用一次。
-       它自己不知道过了多久 —— 转速换算是拿"增量 / ENC_SAMPLE_PERIOD_MS"
-       算的。调用周期不对，转速就成比例地错。 */
+    s_last_tick = now;
+
+    /* ---- 间隔合法性检查 ----
+       下限：两次调用挤在同一毫秒内（比如有人手动多调了一次），
+             按 1ms 算，避免后面除零。
+       上限：被阻塞超过 1 秒（串口自检、断点、跑飞）时，这段增量
+             早就不能代表"当前转速"了，直接丢掉，宁可显示 0 也不显示假值。 */
+    if (dt < ENC_DT_MIN_MS) {
+        dt = ENC_DT_MIN_MS;
+    }
+
+    if (dt > ENC_DT_MAX_MS) {
+        /* 只清增量，不清累计 —— 累计里程是"一共转了多少"，
+           和时间无关，没有理由跟着一起丢 */
+        for (i = 0u; i < ENC_NUM; i++) {
+            s_delta[i] = 0;
+        }
+        s_dt_ms = ENC_SAMPLE_PERIOD_MS;
+        return;
+    }
+
+    s_dt_ms = (uint16_t)dt;
+
     for (i = 0u; i < ENC_NUM; i++) {
         uint16_t now = (uint16_t)__HAL_TIM_GET_COUNTER(&s_htim[i]);
         /* 16 位回绕在这一行被自动处理掉，不需要任何 if 判断 */
@@ -192,8 +227,10 @@ float BSP_Encoder_GetRPM(BSP_EncId_t id)
     }
 
     /* 第一步：增量 → 每秒计数。
-       乘 1000 再除以周期(ms)，把"每 10ms 多少个计数"换成"每秒多少个计数" */
-    counts_per_sec = (float)s_delta[id] * 1000.0f / (float)ENC_SAMPLE_PERIOD_MS;
+       乘 1000 再除以"实测间隔(ms)"，把"这段时间里多少个计数"换成
+       "每秒多少个计数"。★ 用的是实测值 s_dt_ms，不是名义周期，
+       所以主循环偶尔被拖慢时读数依然准 */
+    counts_per_sec = (float)s_delta[id] * 1000.0f / (float)s_dt_ms;
 
     /* 第二步：每秒计数 → 每秒转数。
        ENC_CPR 是输出轴转一圈的总计数（= 线数 × 4 × 减速比） */
@@ -212,6 +249,11 @@ float BSP_Encoder_GetSpeedMMps(BSP_EncId_t id, float wheel_diameter_mm)
     return rpm * 3.14159265f * wheel_diameter_mm / 60.0f;
 }
 
+uint16_t BSP_Encoder_GetDtMs(void)
+{
+    return s_dt_ms;
+}
+
 void BSP_Encoder_Reset(void)
 {
     uint32_t i;
@@ -223,4 +265,9 @@ void BSP_Encoder_Reset(void)
         s_delta[i] = 0;
         s_total[i] = 0;
     }
+
+    /* 时间基准也要一起重置：不然"清零"之后第一次 Update 会把
+       "清零前的那段时间"也算进间隔，转速会偏小 */
+    s_last_tick = HAL_GetTick();
+    s_dt_ms     = ENC_SAMPLE_PERIOD_MS;
 }

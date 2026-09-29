@@ -50,13 +50,18 @@ void BSP_UART_Init(void)
     gpio.Speed = GPIO_SPEED_FREQ_HIGH;  /* 115200 下边沿要够陡 */
     HAL_GPIO_Init(DBG_UART_TX_PORT, &gpio);
 
-    /* PA10 RX → 浮空输入。
-       ★ 这里特意不用上拉：如果外部模块的 TX 是开漏或驱动能力弱，
-       内部上拉会把空闲电平顶在高位，导致收到的高电平被"粘住"、
-       低电平塌不下去。浮空让外部信号完全主导 */
+    /* PA10 RX → 上拉输入。
+       ★ 必须上拉，两个理由：
+       1. UART 的空闲态本来就是高电平，上拉和协议一致
+       2. 更关键：如果 RX 悬空（很多人接调试串口只接 TX 用来打印），
+          浮空脚会持续捡拾环境噪声，产生随机字节。主循环把它们当成
+          串口命令处理，就会出现"上电后蜂鸣器乱响、舵机乱动"这种
+          看起来毫无头绪的现象 —— 实际是噪声在疯狂触发自检菜单。
+          上拉让悬空脚稳定在高电平（空闲），彻底消除这个隐患。
+       外部模块若是开漏 TX，这个内部上拉还能顺便当它的上拉电阻用。 */
     gpio.Pin  = DBG_UART_RX_PIN;
     gpio.Mode = GPIO_MODE_INPUT;
-    gpio.Pull = GPIO_NOPULL;
+    gpio.Pull = GPIO_PULLUP;
     HAL_GPIO_Init(DBG_UART_RX_PORT, &gpio);
 
     huart1.Instance          = DBG_UART;

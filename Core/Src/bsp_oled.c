@@ -53,6 +53,34 @@
 static uint8_t s_buf[OLED_BUF_SIZE];
 
 /* ==========================================================================
+ * 影子帧：精确找出"这一帧到底哪些页变了"
+ * --------------------------------------------------------------------------
+ *   s_buf   = 当前帧（所有绘制函数往这里画）
+ *   s_shown = 屏幕上真正显示着的那一帧（每次成功刷新后同步）
+ *
+ * 【为什么用"整帧对比"而不是"画的时候就标脏"】
+ *   标脏的做法看似更省事，但它会被最常见的界面写法骗过去：
+ *   界面代码几乎都是"先清屏、再按当前状态整帧重画"，
+ *   清屏会把 8 页全标脏 —— 于是一帧一帧全都是整屏刷新，
+ *   优化的意义荡然无存。
+ *
+ *   整帧对比没有这个问题：清屏 + 重画之后，内容没变的地方字节完全一样，
+ *   一比就知道"这几页根本没动"，只把真正变化的页发出去。
+ *   代价是 1KB 影子缓冲（F103C8 有 20KB RAM，完全放得下）
+ *   和每帧 1024 次字节比较（几十微秒，可以忽略）。
+ *
+ * 【收益有多大】
+ *   整块显存 1024 字节走软件 I2C 要 40~50ms。跑车时主循环每 10ms 一拍，
+ *   每拍整屏刷新等于把一半的时间花在刷屏上，编码器采样和控制律全乱。
+ *   而实际一帧里通常只有三四页在变（数值在跳的那几行），
+ *   只刷这几页只要 10~15ms，对控制节拍的影响小得多。
+ * ========================================================================== */
+static uint8_t s_shown[OLED_BUF_SIZE];
+
+/* 1 = 影子帧不可信（刚上电、或者别人直接写过屏幕），下一次刷新强制整屏 */
+static uint8_t s_force_full = 1u;
+
+/* ==========================================================================
  * 6x8 ASCII 字库
  * --------------------------------------------------------------------------
  * 可打印字符 0x20(' ') .. 0x7E('~')，共 95 个。下标 = 字符码 - 0x20。
@@ -321,6 +349,126 @@ void BSP_OLED_Clear(void)
     for (i = 0u; i < OLED_BUF_SIZE; i++) {
         s_buf[i] = 0x00u;
     }
+
+    /* 注意：这里不动影子帧。
+       清屏之后 s_buf 全是 0，而影子帧还留着上一帧的内容，
+       对比时自然就能发现"哪几页被清掉了"，只把这几页刷下去即可 —— 
+       这正是整帧对比的方便之处 */
+}
+
+void BSP_OLED_RefreshPages(uint8_t first, uint8_t last)
+{
+    /* SSD1306 的两条窗口命令：
+         0x21 设置列地址范围，后跟 起始列 和 结束列
+         0x22 设置页地址范围，后跟 起始页 和 结束页
+       窗口定好之后，连续写入的数据会自动按"列递增 → 列满换页"的顺序
+       填满窗口。所以送一段连续显存只需要设置一次窗口，中间不用再干预。
+
+       ★ 页区间必须夹住：窗口命令给的是真实寄存器值，
+         越界会让屏幕进入未定义状态（常见表现为花屏或整屏错行） */
+    uint8_t  col_cmd[3];
+    uint8_t  page_cmd[3];
+    uint32_t i;
+
+    if (first >= OLED_PAGE_NUM) {
+        return;
+    }
+    if (last >= OLED_PAGE_NUM) {
+        last = (uint8_t)(OLED_PAGE_NUM - 1u);
+    }
+    if (last < first) {
+        return;
+    }
+
+    col_cmd[0]  = 0x21u;
+    col_cmd[1]  = 0x00u;
+    col_cmd[2]  = (uint8_t)(OLED_WIDTH - 1u);
+
+    page_cmd[0] = 0x22u;
+    page_cmd[1] = first;
+    page_cmd[2] = last;
+
+    oled_write(OLED_CTRL_CMD, col_cmd, 3u);
+    oled_write(OLED_CTRL_CMD, page_cmd, 3u);
+
+    /* 只送这几页：起始地址 = first × 128（每页 128 字节） */
+    oled_write(OLED_CTRL_DATA,
+               &s_buf[(uint32_t)first * OLED_WIDTH],
+               (uint16_t)((uint16_t)(last - first + 1u) * OLED_WIDTH));
+
+    /* ★ 发完就把这几页同步进影子帧。
+       少同步一次，下次对比就会认为"这几页还没显示"，
+       于是把它们又白刷一遍 —— 不影响正确性，但白费时间 */
+    for (i = (uint32_t)first * OLED_WIDTH; i < ((uint32_t)last + 1u) * OLED_WIDTH; i++) {
+        s_shown[i] = s_buf[i];
+    }
+}
+
+void BSP_OLED_MarkAllDirty(void)
+{
+    /* 不真的去改影子帧的内容（改了反而更难判断），
+       只竖一个"下一次必须整屏刷"的旗子 */
+    s_force_full = 1u;
+}
+
+uint8_t BSP_OLED_HasDirty(void)
+{
+    uint32_t i;
+
+    if (s_force_full != 0u) {
+        return 1u;
+    }
+
+    for (i = 0u; i < OLED_BUF_SIZE; i++) {
+        if (s_buf[i] != s_shown[i]) {
+            return 1u;
+        }
+    }
+    return 0u;
+}
+
+void BSP_OLED_RefreshDirty(void)
+{
+    uint8_t  p;
+    uint8_t  first = 0xFFu;
+    uint8_t  last  = 0x00u;
+    uint32_t i;
+
+    if (s_force_full != 0u) {
+        /* 影子帧不可信（上电第一帧、或者别人绕过本驱动直接写过屏幕），
+           老老实实整屏刷一次，之后就一直走精确对比的快路 */
+        BSP_OLED_Refresh();
+        return;
+    }
+
+    /* 逐页比较当前帧和影子帧，找出真正变化了的页区间。
+       ★ 为什么合并成一个区间而不是逐页刷：每页都要重新发
+         "起始 + 地址 + 控制字 + 停止"，页数一多，事务开销比数据本身还大。
+         中间夹着的没变页跟着刷一遍，代价只有几十微秒，很划算。 */
+    for (p = 0u; p < OLED_PAGE_NUM; p++) {
+        uint32_t base = (uint32_t)p * OLED_WIDTH;
+        uint8_t  changed = 0u;
+
+        for (i = 0u; i < OLED_WIDTH; i++) {
+            if (s_buf[base + i] != s_shown[base + i]) {
+                changed = 1u;
+                break;      /* 一页里只要有一个字节变了就算这一页变了 */
+            }
+        }
+
+        if (changed != 0u) {
+            if (first == 0xFFu) {
+                first = p;
+            }
+            last = p;
+        }
+    }
+
+    if (first == 0xFFu) {
+        return;     /* 什么都没变，一次 I2C 都不发 */
+    }
+
+    BSP_OLED_RefreshPages(first, last);
 }
 
 void BSP_OLED_Refresh(void)
@@ -334,13 +482,14 @@ void BSP_OLED_Refresh(void)
        ★ 所以 1024 字节可以一次性推完，中间不用逐页重设地址 ——
        这是"水平寻址模式"(初始化时的 0x20,0x00)带来的便利。
        如果用默认的页寻址模式，就得写一页、重设一次地址、再写一页，
-       I2C 事务数会翻 8 倍。 */
-    static const uint8_t col_cmd[3]  = { 0x21u, 0x00u, (uint8_t)(OLED_WIDTH - 1u) };
-    static const uint8_t page_cmd[3] = { 0x22u, 0x00u, (uint8_t)(OLED_PAGE_NUM - 1u) };
+       I2C 事务数会翻 8 倍。
 
-    oled_write(OLED_CTRL_CMD, col_cmd, 3u);
-    oled_write(OLED_CTRL_CMD, page_cmd, 3u);
-    oled_write(OLED_CTRL_DATA, s_buf, (uint16_t)OLED_BUF_SIZE);
+       ★ 具体发送逻辑统一放在 BSP_OLED_RefreshPages() 里，
+         整屏刷新就是"刷第 0..7 页"，避免两份几乎一样的代码各自演化。 */
+    BSP_OLED_RefreshPages(0u, (uint8_t)(OLED_PAGE_NUM - 1u));
+
+    /* 整屏发完，影子帧已经是权威的，撤掉"强制整屏"的旗子 */
+    s_force_full = 0u;
 }
 
 void BSP_OLED_ClearAndRefresh(void)
@@ -366,6 +515,7 @@ void BSP_OLED_SetPixel(uint8_t x, uint8_t y, uint8_t on)
     } else {
         s_buf[idx] &= (uint8_t)(~bit);
     }
+
 }
 
 /* ==========================================================================
@@ -402,6 +552,7 @@ void BSP_OLED_DrawString(uint8_t x, uint8_t page, const char *str)
         x = (uint8_t)(x + 6u);
         str++;
     }
+
 }
 
 void BSP_OLED_DrawStringBig(uint8_t x, uint8_t page, const char *str)
@@ -452,6 +603,7 @@ void BSP_OLED_DrawStringBig(uint8_t x, uint8_t page, const char *str)
         x = (uint8_t)(x + 12u);
         str++;
     }
+
 }
 
 void BSP_OLED_Printf(uint8_t x, uint8_t page, const char *fmt, ...)
@@ -549,6 +701,47 @@ void BSP_OLED_DrawBar(uint8_t x, uint8_t page, uint8_t width,
                 /* 填充部分 */
                 s_buf[base + px] |= 0x18u;
             }
+        }
+    }
+}
+
+void BSP_OLED_DrawBox(uint8_t x, uint8_t page, uint8_t width,
+                      uint8_t height_pages, uint8_t filled)
+{
+    uint8_t  p;
+    uint8_t  i;
+    uint16_t base;
+
+    if ((page >= OLED_PAGE_NUM) || (height_pages == 0u) || (width < 2u)) {
+        return;
+    }
+    if ((uint16_t)page + height_pages > OLED_PAGE_NUM) {
+        height_pages = (uint8_t)(OLED_PAGE_NUM - page);
+    }
+    if (((uint16_t)x + width) > OLED_WIDTH) {
+        width = (uint8_t)(OLED_WIDTH - x);
+    }
+
+    for (i = 0u; i < width; i++) {
+        uint16_t px = (uint16_t)x + i;
+        uint8_t  edge_col = ((i == 0u) || (i == (uint8_t)(width - 1u))) ? 1u : 0u;
+
+        for (p = 0u; p < height_pages; p++) {
+            uint8_t edge_row = ((p == 0u) || (p == (uint8_t)(height_pages - 1u))) ? 1u : 0u;
+            uint8_t bits;
+
+            if (filled != 0u) {
+                /* 实心：整列都点亮 */
+                bits = 0xFFu;
+            } else if ((edge_col != 0u) || (edge_row != 0u)) {
+                /* 镂空：只点亮边框。竖边点 0x18，横边点 0xFF */
+                bits = (edge_col != 0u) ? 0x18u : 0xFFu;
+            } else {
+                continue;   /* 内部不画 */
+            }
+
+            base = (uint16_t)(page + p) * OLED_WIDTH;
+            s_buf[base + px] |= bits;
         }
     }
 }

@@ -1,11 +1,11 @@
 /**
   ******************************************************************************
   * @file    bsp_track.c
-  * @brief   六路循迹传感器实现
+  * @brief   八路循迹传感器实现
   *
   * 【数据流】
   *   地面（黑线吸收红外，白底反射红外）
-  *     └─► 六路探头各自输出高低电平
+  *     └─► 八路探头各自输出高低电平
   *           └─► BSP_GPIO_ReadTrackRaw()  → 原始电平掩码（位为 1 = 高电平）
   *                 └─► 按 TRACK_ACTIVE_LOW 做极性转换
   *                       └─► BSP_Track_GetMask() → 压线掩码（位为 1 = 压到黑线）
@@ -22,14 +22,14 @@
 #include "bsp_track.h"
 #include "bsp_gpio.h"
 
-/* 权重表，顺序与传感器索引 0..5 一致。数值本身在 bsp_config.h 里 */
+/* 权重表，顺序与传感器索引 0..7 一致。数值本身在 bsp_config.h 里 */
 static const float s_weight[TRACK_SENSOR_NUM] = {
-    TRACK_WEIGHT_0, TRACK_WEIGHT_1, TRACK_WEIGHT_2,
-    TRACK_WEIGHT_3, TRACK_WEIGHT_4, TRACK_WEIGHT_5,
+    TRACK_WEIGHT_0, TRACK_WEIGHT_1, TRACK_WEIGHT_2, TRACK_WEIGHT_3,
+    TRACK_WEIGHT_4, TRACK_WEIGHT_5, TRACK_WEIGHT_6, TRACK_WEIGHT_7,
 };
 
-/* 六路全压线的掩码。
-   1u << 6 = 0x40，减 1 得 0x3F，正好低 6 位全 1。 */
+/* 八路全压线的掩码。
+   1u << 8 = 0x100，减 1 得 0xFF，正好低 8 位全 1。 */
 #define TRACK_MASK_ALL      ((uint8_t)((1u << TRACK_SENSOR_NUM) - 1u))
 
 /* 最近一次的有效误差。
@@ -147,14 +147,14 @@ float BSP_Track_GetErrorNorm(void)
 
 uint8_t BSP_Track_IsAllBlack(void)
 {
-    /* 六路全压线。特征场景：十字路口、T 字口、起跑线/停止线。
+    /* 八路全压线。特征场景：十字路口、T 字口、起跑线/停止线。
        业务上看到这个通常意味着"这里不是普通循迹段，要特殊处理" */
     return (BSP_Track_GetMask() == TRACK_MASK_ALL) ? 1u : 0u;
 }
 
 uint8_t BSP_Track_IsAllWhite(void)
 {
-    /* 六路全白 = 丢线。可能是冲出赛道、遇到断线、或者被手拿起来了。
+    /* 八路全白 = 丢线。可能是冲出赛道、遇到断线、或者被手拿起来了。
        配合 GetError() 的"沿用上次误差"策略，车会自己找回来 */
     return (BSP_Track_GetMask() == 0u) ? 1u : 0u;
 }
@@ -171,11 +171,26 @@ void BSP_Track_MaskToString(uint8_t mask, char *buf)
         return;
     }
 
-    /* 高位（传感器 5，最右）先写，这样字符串看起来和车头朝向一致：
-       显示 "001100" 就是左边数第 3、4 路压线。
-       若倒序输出，读的人要在脑子里做一次翻转，很容易看错左右。 */
+    /* ★ 从传感器 0 开始写：字符串最左边的字符 = 传感器 0。
+     *
+     * 【这里原来写反了，是个真 bug】
+     *   之前的实现是先写 bit7，也就是把"传感器 7"放在最左边 ——
+     *   结果同一个掩码，串口里的字符串和 OLED 上那 8 个方框
+     *   左右是镜像的：
+     *       只有最左边一路压线时
+     *         屏幕方框：■□□□□□□□   （正确）
+     *         串口字符串：00000001    ← 看着像"最右边压线"
+     *   两处显示互相矛盾，读的人自然会怀疑"是不是极性配反了"，
+     *   于是跑去改 TRACK_ACTIVE_LOW —— 越改越乱。
+     *
+     *   现在统一成"索引 0 在最左边"，和下面三处完全一致：
+     *     · menu_draw_mask_boxes()  画方框的顺序
+     *     · bsp_config.h 里的权重表 TRACK_WEIGHT_0..7
+     *     · 探头索引本身的定义（0..7 = 车头从左到右）
+     *
+     * ★ 调用者给的缓冲区至少要 TRACK_SENSOR_NUM + 1 = 9 字节。 */
     for (i = 0u; i < TRACK_SENSOR_NUM; i++) {
-        buf[i] = ((mask >> (TRACK_SENSOR_NUM - 1u - i)) & 0x01u) ? '1' : '0';
+        buf[i] = ((mask >> i) & 0x01u) ? '1' : '0';
     }
     buf[TRACK_SENSOR_NUM] = '\0';
 }

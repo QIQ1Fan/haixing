@@ -73,6 +73,25 @@ void BSP_Motor_SetSpeed(int16_t left, int16_t right);
 void BSP_Motor_SetDuty(uint16_t duty_l, uint16_t duty_r);
 
 /**
+  * @brief  设置左右轮的转向取反（纠正"电机正负极接反"）
+  * @param  inv_l/inv_r 0 = 不取反，非 0 = 取反
+  * @note   ★ 这是运行期接口，不是编译期宏：参数值来自 app_param 的
+  *         MLINV / MRINV，可以在 OLED 菜单里直接拨，不用重编译重烧写。
+  *         出厂默认值取自 bsp_config.h 的 MOTOR_L_INVERT / MOTOR_R_INVERT。
+  *
+  *         怎么判断该拨哪一个（一定要用测试 4 验，不要靠猜）：
+  *           BSP_Motor_SetSpeed(+, +) 两个轮子都该往前转
+  *             车原地顺时针转（往右打转）→ 右轮反了 → inv_r = 1
+  *             车原地逆时针转（往左打转）→ 左轮反了 → inv_l = 1
+  *             车往后走                  → 两个都反了 → 两个都设 1
+  *         ★ 千万不要两个都随手设 1：那只是把整台车调成"倒着走"。
+  */
+void BSP_Motor_SetInvert(uint8_t inv_l, uint8_t inv_r);
+
+/** @brief 取回当前的转向取反设置（给菜单/串口回显用） */
+void BSP_Motor_GetInvert(uint8_t *inv_l, uint8_t *inv_r);
+
+/**
   * @brief  滑行停止 —— 方向引脚清零，电机输出高阻，靠惯性慢慢停下
   */
 void BSP_Motor_Stop(void);

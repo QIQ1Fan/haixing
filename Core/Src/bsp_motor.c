@@ -33,6 +33,20 @@ static TIM_HandleTypeDef s_htim_motor;
 static int16_t s_speed_l = 0;   /* 缓存最近一次设定值，供回显查询 */
 static int16_t s_speed_r = 0;
 
+/* 左/右轮的转向取反开关。
+ *
+ * 【为什么从"编译期宏"改成了"运行期变量"】
+ *   电机正负极接反是装配时最常犯的错，改宏意味着"改代码 → 重编 → 重烧"
+ *   一整套流程，调一次要一两分钟。
+ *   改成运行期变量之后，BSP_Motor_SetInvert() 可以被 app_car 每个周期
+ *   用参数里的值刷新，于是"在 OLED 菜单里把 MRINV 拨成 1"就能立刻生效，
+ *   跑一下测试 4 就知道对不对，全程不用碰电脑。
+ *
+ *   出厂默认值仍然取自 bsp_config.h 的 MOTOR_L_INVERT / MOTOR_R_INVERT，
+ *   所以老的用法（改宏重编）依然有效，两套不会打架。 */
+static uint8_t s_inv_l = (uint8_t)MOTOR_L_INVERT;
+static uint8_t s_inv_r = (uint8_t)MOTOR_R_INVERT;
+
 /* ==========================================================================
  * 内部工具
  * ========================================================================== */
@@ -168,19 +182,32 @@ void BSP_Motor_Enable(uint8_t enable)
     }
 }
 
+void BSP_Motor_SetInvert(uint8_t inv_l, uint8_t inv_r)
+{
+    /* ★ 只改方向极性，不动 PWM、不动当前速度。
+       所以可以在行驶中安全地改，下一个控制周期就会按新极性输出 */
+    s_inv_l = (inv_l != 0u) ? 1u : 0u;
+    s_inv_r = (inv_r != 0u) ? 1u : 0u;
+}
+
+void BSP_Motor_GetInvert(uint8_t *inv_l, uint8_t *inv_r)
+{
+    if (inv_l != NULL) { *inv_l = s_inv_l; }
+    if (inv_r != NULL) { *inv_r = s_inv_r; }
+}
+
 void BSP_Motor_SetSpeed(int16_t left, int16_t right)
 {
     int16_t l = motor_saturate(left);
     int16_t r = motor_saturate(right);
 
-    /* 编译期开关，用来纠正轮子接线接反的情况。
-       #if 而不是 if：这样参数为 0 时这段代码根本不编译进来 */
-#if MOTOR_L_INVERT
-    l = (int16_t)(-l);
-#endif
-#if MOTOR_R_INVERT
-    r = (int16_t)(-r);
-#endif
+    /* 转向取反：纠正"电机正负极接反"。运行期变量，见文件上方说明 */
+    if (s_inv_l != 0u) {
+        l = (int16_t)(-l);
+    }
+    if (s_inv_r != 0u) {
+        r = (int16_t)(-r);
+    }
 
     /* 左轮走 A 通道：TB6612 真值表里 AIN2=1 是正转 */
     motor_apply(MOTOR_AIN2_PIN, MOTOR_AIN1_PIN, MOTOR_CH_L, l);
