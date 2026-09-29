@@ -76,11 +76,9 @@ APP_Param_t g_param;
 /* ★ 探头极性：默认取自 bsp_config.h 的宏（实车实测 = 压线读高电平） */
 #define DEF_ACT_LOW         TRACK_ACTIVE_LOW
 
-#define DEF_EDGE_N          1
 /* 转角急转时外侧履带的速度。大车要够劲儿，但又不能大到把车掀了 */
 #define DEF_PIVOT_SPD       1600
 /* 急转最长持续时间。超时就交回正常逻辑（丢线找线），避免原地转圈停不下来 */
-#define DEF_PIVOT_MS        2500
 
 #define DEF_SLOW_K          0.6f
 
@@ -165,9 +163,7 @@ const APP_ParamItem_t g_param_table[] = {
     { "MRINV",    offsetof(APP_Param_t, motor_r_inv),  PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
     { "SLOWK",    offsetof(APP_Param_t, slow_k),       PTYPE_F32,  2,   0.05f,   0.0f,     1.50f },
     /* ---- 转角模式（大车/履带车专用，详见 app_car.c 里的状态机说明） ---- */
-    { "EDGEN",    offsetof(APP_Param_t, edge_n),       PTYPE_U8,   0,   1.0f,    0.0f,     3.0f },
     { "PIVOT",    offsetof(APP_Param_t, pivot_spd),    PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
-    { "PIVOTms",  offsetof(APP_Param_t, pivot_ms),     PTYPE_U16,  0, 100.0f,  200.0f,  5000.0f },
     { "STEERINV", offsetof(APP_Param_t, steer_inv),    PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
     /* ------------------------------ 转向环 ------------------------------ */
     { "KP",       offsetof(APP_Param_t, turn_kp),      PTYPE_F32,  0,  50.0f,    0.0f,  4000.0f },
@@ -276,9 +272,7 @@ static void param_fill_default(APP_Param_t *p)
     p->motor_l_inv   = (uint8_t)DEF_MOTOR_L_INV;
     p->motor_r_inv   = (uint8_t)DEF_MOTOR_R_INV;
     p->act_low       = (uint8_t)DEF_ACT_LOW;
-    p->edge_n        = (uint8_t)DEF_EDGE_N;
     p->pivot_spd     = (int16_t)DEF_PIVOT_SPD;
-    p->pivot_ms      = (uint16_t)DEF_PIVOT_MS;
     p->slow_k        = DEF_SLOW_K;
 
     p->lost_turn    = (int16_t)DEF_LOST_TURN;

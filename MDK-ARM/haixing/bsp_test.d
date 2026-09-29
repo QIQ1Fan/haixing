@@ -42,3 +42,4 @@ haixing\bsp_test.o: ../Core/Inc/app_param.h
 haixing\bsp_test.o: ../Core/Inc/app_car.h
 haixing\bsp_test.o: ../Core/Inc/app_leg.h
 haixing\bsp_test.o: ../Core/Inc/app_menu.h
+haixing\bsp_test.o: ../Core/Inc/app_route.h

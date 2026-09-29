@@ -154,40 +154,6 @@ float BSP_Track_GetError(void)
     return s_last_error;
 }
 
-float BSP_Track_GetErrorExclEdge(uint8_t n)
-{
-    uint8_t  mask;
-    float    sum = 0.0f;
-    uint8_t  cnt = 0u;
-    uint32_t i;
-
-    /* 保护：最多排除到只剩中间一路，再排就没探头可用了 */
-    if (n >= (uint8_t)(TRACK_SENSOR_NUM / 2u)) {
-        n = (uint8_t)((TRACK_SENSOR_NUM / 2u) - 1u);
-    }
-
-    mask = BSP_Track_GetMask();
-
-    /* 只累加 [n, TRACK_SENSOR_NUM-n) 这一段，也就是中间那几路。
-       权重仍用它们自己的（±5、±3 …），所以误差量程跟着变小 ——
-       这正是我们要的"直道更柔"的效果 */
-    for (i = (uint32_t)n; i < ((uint32_t)TRACK_SENSOR_NUM - (uint32_t)n); i++) {
-        if ((mask >> i) & 0x01u) {
-            sum += s_weight[i];
-            cnt++;
-        }
-    }
-
-    /* 中间几路一个都没压到：和 GetError() 一样沿用上次的有效误差，
-       绝不返回 0（返回 0 会被 PID 当成"正好居中"，车会直着冲出去） */
-    if (cnt == 0u) {
-        return s_last_error;
-    }
-
-    s_last_error = sum / (float)cnt;
-    return s_last_error;
-}
-
 float BSP_Track_GetErrorNorm(void)
 {
     /* 归一化到 ±1.0。建议 PID 用这个值：

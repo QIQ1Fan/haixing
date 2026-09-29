@@ -74,6 +74,7 @@
 #include "app_leg.h"
 #include "app_car.h"
 #include "app_menu.h"
+#include "app_route.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -227,6 +228,13 @@ int main(void)
 
   BSP_Buzzer_Beep(120u);
   main_boot_report();
+
+  /* ★ 固定地图模式：先问一句"跑路线还是进菜单"。
+       选 K1 → 执行 app_route.c 里那条路线脚本（内部阻塞，跑完返回）；
+       选 K2 → 立刻返回，下面照常进主循环，就是"调参 + 手动 START"那一套。
+       所以调参和跑路线互不干扰：想调参就选 K2。
+       30 秒不按键会自动进菜单，免得开了电就走开、车干等在询问画面。 */
+  APP_Route_Enter();
 
   s_next_tick = HAL_GetTick();
 

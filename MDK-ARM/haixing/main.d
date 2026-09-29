@@ -45,3 +45,4 @@ haixing\main.o: ../Core/Inc/app_param.h
 haixing\main.o: ../Core/Inc/app_leg.h
 haixing\main.o: ../Core/Inc/app_car.h
 haixing\main.o: ../Core/Inc/app_menu.h
+haixing\main.o: ../Core/Inc/app_route.h

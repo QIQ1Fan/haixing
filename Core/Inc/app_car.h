@@ -69,8 +69,6 @@ typedef struct {
     uint8_t  mask;          /* 当前压线掩码（bit0 = 最左一路） */
     uint8_t  lost;          /* 1 = 当前判定为丢线 */
     uint8_t  crossing;      /* 1 = 当前八路全压（十字/停止线） */
-    uint8_t  corner;        /* 转角模式状态：0 = 正常循迹，1 = 已探到转角（保持直行中），
-                               2 = 到位急转中。详见 app_car.c 的状态机说明 */
     float    err;           /* 归一化位置误差 [-1, +1]，已按 STEERINV 取反 */
     float    turn;          /* 转向环输出（占空比单位） */
     int16_t  base_now;      /* 当前基础速度（含起步斜坡、丢线减速后的实际值） */
@@ -127,8 +125,6 @@ const APP_CarStatus_t *APP_Car_GetStatus(void);
 /** @brief 状态名（ASCII，给屏幕和串口用） */
 const char *APP_Car_StateName(uint8_t state);
 
-/** @brief 转角模式状态名（"ARM  " / "TURN " / "-----"，给屏幕用） */
-const char *APP_Car_CornerName(uint8_t corner);
 
 /** @brief 把一行状态打印到串口（★ 频率别太高，115200 下一行要几毫秒） */
 void APP_Car_PrintStatus(void);

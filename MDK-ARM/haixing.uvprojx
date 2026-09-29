@@ -489,6 +489,11 @@
               <FileType>1</FileType>
               <FilePath>../Core/Src/app_menu.c</FilePath>
             </File>
+            <File>
+              <FileName>app_route.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/app_route.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

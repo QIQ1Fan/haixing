@@ -19,6 +19,7 @@
 "haixing\app_leg.o"
 "haixing\app_car.o"
 "haixing\app_menu.o"
+"haixing\app_route.o"
 "haixing\stm32f1xx_hal_gpio_ex.o"
 "haixing\stm32f1xx_hal.o"
 "haixing\stm32f1xx_hal_rcc.o"

@@ -22,196 +22,197 @@ Dialog DLL:      TCM.DLL V1.56.6.0
  
 <h2>Project:</h2>
 d:\Project_all\haixing\MDK-ARM\haixing.uvprojx
-Project File Date:  09/28/2026
+Project File Date:  09/29/2026
 
 <h2>Output:</h2>
 *** Using Compiler 'V5.06 update 7 (build 960)', folder: 'C:\keil_ARM\ARM\ARM_Compiler_5.06u7\Bin'
 Rebuild target 'haixing'
 assembling startup_stm32f103xb.s...
-compiling bsp_motor.c...
 compiling stm32f1xx_hal_msp.c...
+compiling bsp_encoder.c...
 compiling bsp_pid.c...
-compiling bsp_key.c...
 compiling stm32f1xx_it.c...
-compiling bsp_track.c...
-compiling bsp_buzzer.c...
-compiling gpio.c...
 compiling bsp_gpio.c...
+compiling gpio.c...
+compiling bsp_uart.c...
+compiling bsp_motor.c...
+compiling bsp_servo.c...
+compiling bsp_buzzer.c...
+compiling bsp_key.c...
 compiling main.c...
-../Core/Src/main.c(151): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/main.c(152): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[boot] 菜单在下面。若敲命令没反应，先�? PA10(RX) 是否接了适配器的 TX。\r\n");
 ../Core/Src/main.c: 1 warning, 0 errors
-compiling bsp_uart.c...
-compiling bsp_encoder.c...
-compiling bsp_servo.c...
+compiling bsp_track.c...
 compiling app_param.c...
-compiling bsp_oled.c...
 compiling bsp_test.c...
-../Core/Src/bsp_test.c(60): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(61): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  1. 蜂鸣�?        2. 串口回显\r\n");
-../Core/Src/bsp_test.c(63): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(64): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  7. 循迹传感�?    8. 按键事件\r\n");
-../Core/Src/bsp_test.c(66): warning:  #870-D: invalid multibyte character sequence
-      BSP_UART_SendString("  P. 蜂鸣器极性自检   (�?/静音分不清时先跑这个)\r\n");
 ../Core/Src/bsp_test.c(67): warning:  #870-D: invalid multibyte character sequence
+      BSP_UART_SendString("  P. 蜂鸣器极性自检   (�?/静音分不清时先跑这个)\r\n");
+../Core/Src/bsp_test.c(68): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  H. 舵机隔离保持     (抖动时用来定位原�?)\r\n");
-../Core/Src/bsp_test.c(69): warning:  #870-D: invalid multibyte character sequence
-      BSP_UART_SendString("  C. 启动/停止循迹    R. 实时状态打�? 5s\r\n");
 ../Core/Src/bsp_test.c(70): warning:  #870-D: invalid multibyte character sequence
+      BSP_UART_SendString("  C. 启动/停止循迹    R. 实时状态打�? 5s\r\n");
+../Core/Src/bsp_test.c(71): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  V. 打印全部参数     W. 串口调参(改一个�?)\r\n");
-../Core/Src/bsp_test.c(72): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(73): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  L. 支撑脚测�?       M. 回到 OLED 主界面\r\n");
-../Core/Src/bsp_test.c(75): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(77): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("请输�? 1-9 / 0 / P / H / C / R / V / W / S / D / L / M / E / ? :\r\n");
-../Core/Src/bsp_test.c(129): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(132): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_Printf("\r\n[uart] 收到�? ASCII 字节 0x%02X —�? 输入法多半是全角。\r\n",
-../Core/Src/bsp_test.c(129): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(132): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_Printf("\r\n[uart] 收到�? ASCII 字节 0x%02X —�? 输入法多半是全角。\r\n",
-../Core/Src/bsp_test.c(131): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(134): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("[uart] 请切到【半角】再�? ?, 或用串口助手�? HEX 发�? 3F\r\n");
-../Core/Src/bsp_test.c(131): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(134): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("[uart] 请切到【半角】再�? ?, 或用串口助手�? HEX 发�? 3F\r\n");
-../Core/Src/bsp_test.c(131): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(134): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("[uart] 请切到【半角】再�? ?, 或用串口助手�? HEX 发�? 3F\r\n");
-../Core/Src/bsp_test.c(210): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(214): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  a) PB3 是否�? JTAG 占用（HAL_MspInit 里的 SWJ_NOJTAG）\r\n");
-../Core/Src/bsp_test.c(224): warning:  #870-D: invalid multibyte character sequence
-      BSP_UART_Printf("  无符�?: %u\r\n",  (unsigned int)65535u);
 ../Core/Src/bsp_test.c(228): warning:  #870-D: invalid multibyte character sequence
+      BSP_UART_Printf("  无符�?: %u\r\n",  (unsigned int)65535u);
+../Core/Src/bsp_test.c(232): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[串口] 逐字节输�? ABCDEFG...\r\n  ");
-../Core/Src/bsp_test.c(244): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(248): warning:  #870-D: invalid multibyte character sequence
       static const char *const label[] = { "中位", "一�?(180°)", "中位",
-../Core/Src/bsp_test.c(245): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(249): warning:  #870-D: invalid multibyte character sequence
                                            "另一�?(0°)", "中位" };
-../Core/Src/bsp_test.c(261): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(265): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  a) 两端应当明显对称，脉�? 500us / 2500us\r\n");
-../Core/Src/bsp_test.c(262): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(266): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  b) 若两端不对称或打不满，改 bsp_config.h �? SERVO_PULSE_x_US\r\n");
-../Core/Src/bsp_test.c(278): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(282): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[蜂鸣器极性] 交替输出�?/高电平各 1 秒，�? 3 轮\r\n");
-../Core/Src/bsp_test.c(278): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(282): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[蜂鸣器极性] 交替输出�?/高电平各 1 秒，�? 3 轮\r\n");
-../Core/Src/bsp_test.c(279): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(283): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  请记住哪一段是【安静】的，然后对应设�? bsp_config.h：\r\n");
-../Core/Src/bsp_test.c(291): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  >>> 现在输出【低电平�?...\r\n");
 ../Core/Src/bsp_test.c(295): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  >>> 现在输出【低电平�?...\r\n");
+../Core/Src/bsp_test.c(299): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("  >>> 现在输出【高电平�?...\r\n");
-../Core/Src/bsp_test.c(318): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(322): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  现在开�?...\r\n");
-../Core/Src/bsp_test.c(326): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(330): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_Printf("[舵机隔离] 结束，脉�? %u us\r\n",
-../Core/Src/bsp_test.c(336): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(340): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_Printf("[电机] 正转 2s (占空�? %d)\r\n", (int)TEST_MOTOR_DUTY);
-../Core/Src/bsp_test.c(344): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(348): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_Printf("[电机] 反转 2s (占空�? %d)\r\n", (int)TEST_MOTOR_DUTY);
-../Core/Src/bsp_test.c(349): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(353): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[电机] 结束。若某个轮子方向相反，改 bsp_config.h �? MOTOR_x_INVERT\r\n");
-../Core/Src/bsp_test.c(387): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(391): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[编码器] 3 秒内请用手转动两个轮�?...\r\n");
-../Core/Src/bsp_test.c(388): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(392): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  格式: L增量 L累计 L转�? | R增量 R累计 R转速\r\n");
-../Core/Src/bsp_test.c(419): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  a) 编码�? A/B 相是否接到了 PA0/PA1 �? PB6/PB7\r\n");
-../Core/Src/bsp_test.c(419): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(423): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("  a) 编码�? A/B 相是否接到了 PA0/PA1 �? PB6/PB7\r\n");
 ../Core/Src/bsp_test.c(423): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  a) 编码�? A/B 相是否接到了 PA0/PA1 �? PB6/PB7\r\n");
+../Core/Src/bsp_test.c(427): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_Printf("[编码器] 共收�? %u 次有效增量\r\n",
-../Core/Src/bsp_test.c(425): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(429): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_Printf("  标定�? ENC_CPR = %.1f，若转速显示不符请�? bsp_config.h\r\n",
-../Core/Src/bsp_test.c(425): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(429): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_Printf("  标定�? ENC_CPR = %.1f，若转速显示不符请�? bsp_config.h\r\n",
-../Core/Src/bsp_test.c(438): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(442): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[循迹] 3 秒内请把车在黑线上左右移�?...\r\n");
-../Core/Src/bsp_test.c(439): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(443): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  掩码  压线�?  位置误差  原始电平\r\n");
-../Core/Src/bsp_test.c(462): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(466): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  b) 若全�? 1 或全�? 0 且不随位置变化，多半是极性反了\r\n");
-../Core/Src/bsp_test.c(462): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(466): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  b) 若全�? 1 或全�? 0 且不随位置变化，多半是极性反了\r\n");
-../Core/Src/bsp_test.c(463): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(467): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("     �? bsp_config.h �? TRACK_ACTIVE_LOW 取反试试\r\n");
-../Core/Src/bsp_test.c(463): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(467): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("     �? bsp_config.h �? TRACK_ACTIVE_LOW 取反试试\r\n");
-../Core/Src/bsp_test.c(473): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(477): warning:  #870-D: invalid multibyte character sequence
           "确认(PB13)", "退�?(PB14)", "�?  (PB15)", "�?  (PA15)"
-../Core/Src/bsp_test.c(473): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(477): warning:  #870-D: invalid multibyte character sequence
           "确认(PB13)", "退�?(PB14)", "�?  (PB15)", "�?  (PA15)"
-../Core/Src/bsp_test.c(473): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(477): warning:  #870-D: invalid multibyte character sequence
           "确认(PB13)", "退�?(PB14)", "�?  (PB15)", "�?  (PA15)"
-../Core/Src/bsp_test.c(488): warning:  #870-D: invalid multibyte character sequence
-      BSP_UART_SendString("\r\n[按键] 10 秒内请按任意键（短按、长按都试试�?...\r\n");
-../Core/Src/bsp_test.c(489): warning:  #870-D: invalid multibyte character sequence
-      BSP_UART_SendString("[按键] 同时监视四个引脚的【原始电平】：1 = 松开�?0 = 按下\r\n");
-../Core/Src/bsp_test.c(491): warning:  #870-D: invalid multibyte character sequence
-      BSP_UART_SendString("[按键]   按住时电�? 1 -> 0   = 引脚和按键都是好的\r\n");
 ../Core/Src/bsp_test.c(492): warning:  #870-D: invalid multibyte character sequence
+      BSP_UART_SendString("\r\n[按键] 10 秒内请按任意键（短按、长按都试试�?...\r\n");
+../Core/Src/bsp_test.c(493): warning:  #870-D: invalid multibyte character sequence
+      BSP_UART_SendString("[按键] 同时监视四个引脚的【原始电平】：1 = 松开�?0 = 按下\r\n");
+../Core/Src/bsp_test.c(495): warning:  #870-D: invalid multibyte character sequence
+      BSP_UART_SendString("[按键]   按住时电�? 1 -> 0   = 引脚和按键都是好的\r\n");
+../Core/Src/bsp_test.c(496): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[按键]   按住时电平不�?     = 线没接到这个脚（换脚或查线，不是程序问题）\r\n");
-../Core/Src/bsp_test.c(547): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(551): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  电平�? 1->0、也打出了事�?  = 这一路完全正常\r\n");
-../Core/Src/bsp_test.c(547): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(551): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  电平�? 1->0、也打出了事�?  = 这一路完全正常\r\n");
-../Core/Src/bsp_test.c(548): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(552): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  电平�? 1->0、但没有事件    = 程序和接线都没问题，是按键抖动太大，加大 KEY_DEBOUNCE_CNT\r\n");
-../Core/Src/bsp_test.c(549): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(553): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  电平一直不�?              = 这一路没接到单片机，查线/查脚位\r\n");
-../Core/Src/bsp_test.c(550): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(554): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  只有【减�?(PA15)不动       = 先查 PA15 �? JTAG 释放（SWJ_NOJTAG），再查按键\r\n");
-../Core/Src/bsp_test.c(550): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(554): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  只有【减�?(PA15)不动       = 先查 PA15 �? JTAG 释放（SWJ_NOJTAG），再查按键\r\n");
-../Core/Src/bsp_test.c(567): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(571): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("[OLED] 切换到实时数值显�? 5 秒\r\n");
-../Core/Src/bsp_test.c(587): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(591): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  a) OLED_I2C_ADDR 是否�? 0x78（有的模块是 0x7A）\r\n");
-../Core/Src/bsp_test.c(994): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(998): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("       现在请在串口助手里敲几个字符（比�? ? �? abc）\r\n");
-../Core/Src/bsp_test.c(994): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(998): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("       现在请在串口助手里敲几个字符（比�? ? �? abc）\r\n");
-../Core/Src/bsp_test.c(1028): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(1032): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("[uart] 一个字节都没收�? —�? 是【接线】问题，按顺序查：\r\n");
-../Core/Src/bsp_test.c(1028): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(1032): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("[uart] 一个字节都没收�? —�? 是【接线】问题，按顺序查：\r\n");
-../Core/Src/bsp_test.c(1030): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("     （TX �? RX 要交叉；只接一�? TX 是最常见的错）\r\n");
-../Core/Src/bsp_test.c(1030): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("     （TX �? RX 要交叉；只接一�? TX 是最常见的错）\r\n");
-../Core/Src/bsp_test.c(1032): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  c) 适配器是 3.3V 电平吗？5V �? TTL 也能收，但别�? RS232 �? ±12V\r\n");
-../Core/Src/bsp_test.c(1032): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  c) 适配器是 3.3V 电平吗？5V �? TTL 也能收，但别�? RS232 �? ±12V\r\n");
-../Core/Src/bsp_test.c(1032): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  c) 适配器是 3.3V 电平吗？5V �? TTL 也能收，但别�? RS232 �? ±12V\r\n");
-../Core/Src/bsp_test.c(1033): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  d) 串口助手是不是选错�? COM �? / 被别的软件占着\r\n");
-../Core/Src/bsp_test.c(1033): warning:  #870-D: invalid multibyte character sequence
-          BSP_UART_SendString("  d) 串口助手是不是选错�? COM �? / 被别的软件占着\r\n");
 ../Core/Src/bsp_test.c(1034): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("     （TX �? RX 要交叉；只接一�? TX 是最常见的错）\r\n");
+../Core/Src/bsp_test.c(1034): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("     （TX �? RX 要交叉；只接一�? TX 是最常见的错）\r\n");
+../Core/Src/bsp_test.c(1036): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  c) 适配器是 3.3V 电平吗？5V �? TTL 也能收，但别�? RS232 �? ±12V\r\n");
+../Core/Src/bsp_test.c(1036): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  c) 适配器是 3.3V 电平吗？5V �? TTL 也能收，但别�? RS232 �? ±12V\r\n");
+../Core/Src/bsp_test.c(1036): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  c) 适配器是 3.3V 电平吗？5V �? TTL 也能收，但别�? RS232 �? ±12V\r\n");
+../Core/Src/bsp_test.c(1037): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  d) 串口助手是不是选错�? COM �? / 被别的软件占着\r\n");
+../Core/Src/bsp_test.c(1037): warning:  #870-D: invalid multibyte character sequence
+          BSP_UART_SendString("  d) 串口助手是不是选错�? COM �? / 被别的软件占着\r\n");
+../Core/Src/bsp_test.c(1038): warning:  #870-D: invalid multibyte character sequence
           BSP_UART_SendString("[uart] 提示：RX 不通不影响�? OLED 菜单，四按键照样能调参和跑车\r\n");
-../Core/Src/bsp_test.c(1040): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(1044): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  EF BC 9F 连着�? = 全角「？」，请把输入法切成半角\r\n");
-../Core/Src/bsp_test.c(1041): warning:  #870-D: invalid multibyte character sequence
+../Core/Src/bsp_test.c(1045): warning:  #870-D: invalid multibyte character sequence
       BSP_UART_SendString("  每行只有一个字节且值很随机 = 适配�?/波特率有问题\r\n");
 ../Core/Src/bsp_test.c: 72 warnings, 0 errors
+compiling bsp_oled.c...
 compiling app_leg.c...
-compiling stm32f1xx_hal_gpio_ex.c...
 compiling app_car.c...
-compiling stm32f1xx_hal.c...
 compiling app_menu.c...
-compiling stm32f1xx_hal_rcc_ex.c...
+compiling stm32f1xx_hal_gpio_ex.c...
+compiling stm32f1xx_hal.c...
+compiling app_route.c...
 compiling stm32f1xx_hal_gpio.c...
+compiling stm32f1xx_hal_rcc_ex.c...
 compiling stm32f1xx_hal_cortex.c...
-compiling stm32f1xx_hal_dma.c...
-compiling stm32f1xx_hal_rcc.c...
 compiling stm32f1xx_hal_pwr.c...
-compiling stm32f1xx_hal_flash_ex.c...
+compiling stm32f1xx_hal_dma.c...
 compiling stm32f1xx_hal_flash.c...
+compiling stm32f1xx_hal_flash_ex.c...
+compiling stm32f1xx_hal_rcc.c...
 compiling stm32f1xx_hal_exti.c...
-compiling stm32f1xx_hal_tim_ex.c...
 compiling system_stm32f1xx.c...
+compiling stm32f1xx_hal_tim_ex.c...
 compiling stm32f1xx_hal_uart.c...
 compiling stm32f1xx_hal_tim.c...
 linking...
-Program Size: Code=37168 RO-data=6084 RW-data=144 ZI-data=4304  
+Program Size: Code=38208 RO-data=6036 RW-data=160 ZI-data=4296  
 FromELF: creating hex file...
 "haixing\haixing.axf" - 0 Error(s), 73 Warning(s).
 
