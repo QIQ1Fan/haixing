@@ -87,7 +87,7 @@
  * ========================================================================== */
 #define MENU_ROWS           6u      /* 主菜单 / 参数列表一屏能显示几行（page1..6） */
 #define MENU_LIVE_ROWS      4u      /* 行驶中调参页一屏几行（page1..4） */
-#define MENU_LIVE_MAX       5u      /* 行驶中调参最多放几个参数 */
+#define MENU_LIVE_MAX       6u      /* 行驶中调参最多放几个参数 */
 #define MENU_VAL_X          66u     /* 列表里"值"的列（名字最长 8 字符 = 60 像素）*/
 
 /* 临时提示信息的显示时长（毫秒）。用非阻塞的"到期自动消失"，
@@ -144,7 +144,7 @@ static const char *const s_menu_name[MI_NUM] = {
 /* 行驶中调参页关心的参数名。按名字查索引，查不到就跳过 ——
    这样以后参数表改名/删参数，这里不会编译报错，最多少显示一行 */
 static const char *const s_live_name[MENU_LIVE_MAX] = {
-    "KP", "KD", "BASESPD", "TURNMAX", "DEADZONE"
+    "KP", "KD", "SLOWK", "BASESPD", "TURNMAX", "DEADZONE"
 };
 
 /* ==========================================================================
@@ -497,7 +497,9 @@ static void menu_draw_status(void)
            ★ 跑车时必须写 "HOLD"：短按 K2 现在不动作，不写清楚会以为按键坏了 */
         BSP_OLED_DrawString(0u, 7u, "K1:TUNE K2 HOLD:STOP");
     } else {
-        BSP_OLED_DrawString(0u, 7u, "K1:MENU");
+        /* ★ 停车状态必须把"长按 K2 = 保存"写出来：
+           调参调完最常见的下一步就是保存，不写用户只能去菜单里翻 */
+        BSP_OLED_DrawString(0u, 7u, "K1:MENU K2 HOLD:SAVE");
     }
 }
 
@@ -668,15 +670,21 @@ static void menu_draw_sensor(void)
     BSP_OLED_DrawString(120u, 1u, "R");
     menu_draw_mask_boxes(6u, 1u, 13u, 1u, 2u, mask);
 
+    /* ★ 三个字符串一起看，极性对不对一秒钟就能判断：
+         RAW  = 引脚原始电平（1 = 高）
+         MASK = 翻译成"是否压线"之后的结果（1 = 压线）
+         两者必须【互补】。另外注意 MASK 的 1 一定要落在真正压线的那几路上 ——
+         一条居中的黑线，MASK 的 1 只能是【中间连续的一段】，
+         绝不可能出现在"最左两路 + 最右两路"那种形状上（几何上不可能）。 */
     BSP_OLED_Printf(0u, 3u, "MASK %s", mask_str);
     BSP_OLED_Printf(0u, 4u, "RAW  %s", raw_str);
+    BSP_OLED_Printf(0u, 7u, "POL:%s K2:BACK",
+                    (BSP_Track_GetActiveLow() != 0u) ? "LOW " : "HIGH");
 
     /* 误差用原始值和归一化值各显示一份：
        前者看探头权重表对不对，后者看 PID 实际吃到的量 */
     BSP_OLED_Printf(0u, 5u, "err  %+6.2f", (double)BSP_Track_GetError());
     BSP_OLED_Printf(0u, 6u, "errN %+6.3f", (double)BSP_Track_GetErrorNorm());
-
-    BSP_OLED_DrawString(0u, 7u, "K2:BACK");
 }
 
 /* --------------------------------------------------------------------------
@@ -822,29 +830,11 @@ static uint8_t menu_key_status(uint8_t key, uint8_t evt)
     }
 
     if (key == (uint8_t)MKEY_BACK) {
-        /* ★★ 停车 = 必须【长按】按键2 ★★
-         *
-         * 为什么改成"只认长按"：跑车时手在车上、眼睛在车上看，
-         * 短按太容易误触 —— 碰一下就急停，正跑得好的车莫名其妙刹住。
-         * 长按（0.6 秒）是有意为之的动作，不会误触，也够快。
-         *
-         * ★ 这里判的是"事件"而不是"当前是否按住"：
-         *   KEY_EVENT_LONG 在按住满 0.6 秒时产生一次，之后是连发，
-         *   所以一次长按只会停一次，不会重复触发。
-         *
-         * 判断用 state != IDLE 而不是 IsRunning()：
-         * 丢线报警(LOST)和堵转报警(STALL)状态下 IsRunning() 也是 0，
-         * 但那两个状态下轮子可能还在转，用户长按一定是要它停。 */
-        if (evt != (uint8_t)KEY_EVENT_LONG) {
-            return 0u;      /* 短按不动作 —— 跑车时防误触 */
-        }
-
-        if (APP_Car_GetState() != (uint8_t)APP_CAR_IDLE) {
-            APP_Car_Brake();
-            menu_set_msg("STOPPED", MENU_MSG_MS);
-            return 1u;
-        }
-        return 0u;      /* 已经停着了，长按也没事可做 */
+        /* 状态页的 K2 全部交给 menu_dispatch() 的"长按 = 停车/保存"统一处理：
+           短按在这里没有任何含义（跑车时防误触），长按已经被上层吞掉了。
+           所以这里直接返回"没受理"，省得和上层抢同一个手势。 */
+        (void)evt;
+        return 0u;
     }
 
     return 0u;
@@ -1124,19 +1114,8 @@ static uint8_t menu_key_live(uint8_t key, uint8_t evt)
     }
 
     if (key == (uint8_t)MKEY_BACK) {
-        /* 短按 = 回状态页，不停车（这是本页最常用的操作，必须灵敏） */
-        if (evt != (uint8_t)KEY_EVENT_LONG) {
-            s_page = (uint8_t)UI_STATUS;
-            return 1u;
-        }
-
-        /* ★ 长按 = 停车。和状态页保持同一套手势：
-           不管当前停在哪个页面，"长按按键2"永远等于"让车停下来"，
-           跑车的人不需要回忆"我现在这一页该怎么停" */
-        if (APP_Car_GetState() != (uint8_t)APP_CAR_IDLE) {
-            APP_Car_Brake();
-            menu_set_msg("STOPPED", MENU_MSG_MS);
-        }
+        /* 短按 = 回状态页，不停车（本页最常用的操作，必须灵敏）。
+           长按已经被 menu_dispatch() 统一处理成"停车/保存"，走不到这里 */
         s_page = (uint8_t)UI_STATUS;
         return 1u;
     }
@@ -1147,6 +1126,42 @@ static uint8_t menu_key_live(uint8_t key, uint8_t evt)
 /** 按键分发。返回 1 = 受理了（上层负责嘀一声 + 立刻重画） */
 static uint8_t menu_dispatch(uint8_t key, uint8_t evt)
 {
+    /* ======================================================================
+     * ★★ 长按 K2 的全局含义 ★★
+     * ----------------------------------------------------------------------
+     *   "跑着车" 和 "停着调参" 是两种完全不同的场景，长按 K2 在两个场景里
+     *   各有一个"最该做的事"，所以按状态分派，而不是按页面分派：
+     *
+     *     车在跑   →  停车（刹车）。跑车时最需要的永远是"立刻让它停"。
+     *     车停着   →  保存参数到 Flash。调参调完最需要的是"别掉电就白调"。
+     *
+     *   放在 menu_dispatch() 的最前面而不是各页自己的按键函数里，有两个原因：
+     *     1) 不管当前在状态页、参数列表还是参数编辑页，手势都一样 ——
+     *        跑车的人不用回忆"我现在这一页该怎么存"
+     *     2) 保存这个动作只能在停车时做（要擦 Flash，约 30ms 全程阻塞），
+     *        集中在一处判断，就不可能出现"某个页面忘了拦"的漏网之鱼
+     *
+     *   ★ 短按 K2 不受影响，仍然是各页自己的"返回上一级"。
+     * ====================================================================== */
+    if ((key == (uint8_t)MKEY_BACK) && (evt == (uint8_t)KEY_EVENT_LONG)) {
+        if (APP_Car_GetState() != (uint8_t)APP_CAR_IDLE) {
+            /* ---- 跑着车：停车 ---- */
+            APP_Car_Brake();
+            menu_set_msg("STOPPED", MENU_MSG_MS);
+            s_page = (uint8_t)UI_STATUS;
+        } else {
+            /* ---- 停着：保存参数 ----
+               APP_Param_Save() 内部会先做一次限幅并重算校验和，
+               写完后还会回读比对，失败会如实返回 0，不会"假装存好了" */
+            if (APP_Param_Save() != 0u) {
+                menu_set_msg("SAVED OK", MENU_MSG_MS);
+            } else {
+                menu_set_msg("SAVE FAILED", MENU_MSG_MS);
+            }
+        }
+        return 1u;
+    }
+
     switch (s_page) {
     case (uint8_t)UI_MENU:       return menu_key_menu(key, evt);
     case (uint8_t)UI_PARAM_LIST: return menu_key_param_list(key, evt);

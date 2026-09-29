@@ -61,6 +61,10 @@
 /* 丢线时基础速度打几折。留时间给转向，也降低冲出赛道的概率 */
 #define CAR_LOST_SPEED_SCALE        0.6f
 
+/* 大偏差减速的下限系数：不管偏多少，至少保留这么多速度。
+   理由见 APP_Car_Update() "速度规划"一节 —— 停住的车是没法转向的 */
+#define CAR_SLOW_MIN_SCALE          0.25f
+
 /* 报警蜂鸣：间隔、单次时长、最多响几声。
  *
  * ★ 为什么必须限制次数（"最多几声"这一条是后加的，之前是个 bug）：
@@ -103,6 +107,20 @@ static uint8_t  s_pid_stale   = 0u;         /* 1 = 丢线期间没跑 PID，重�
 static uint32_t s_last_tick   = 0u;         /* 上一拍的时刻，用来量出真实 dt */
 static uint8_t  s_ramping     = 0u;         /* 1 = 还在起步斜坡里，见"速度规划"一节 */
 static uint8_t  s_alert_cnt   = 0u;         /* 报警已经响过几声（响够就不再响） */
+
+/* ---- 转角模式状态机 ----
+ *   CORNER_NONE  正常循迹：只用中间几路算误差，PID 连续纠偏
+ *   CORNER_ARMED 已经看到外侧探头压线 = 前方是转角 → 不再转向，保持直行
+ *   CORNER_TURN  车头探头全不见黑线 = 转角已到车身下方 → 按记住的方向急转
+ * 详细理由见 APP_Car_Update() 里的说明 */
+#define CORNER_NONE     0u
+#define CORNER_ARMED    1u
+#define CORNER_TURN     2u
+
+static uint8_t  s_corner     = CORNER_NONE; /* 当前处于哪个阶段 */
+static int8_t   s_corner_dir = 0;           /* -1 = 当初是左侧探头亮的（要左转）*/
+static uint16_t s_corner_ms  = 0u;          /* 本阶段已持续毫秒（用于超时） */
+static uint16_t s_white_ms   = 0u;          /* 全白持续毫秒（去抖用） */
 
 /* ==========================================================================
  * 内部工具
@@ -192,6 +210,7 @@ void APP_Car_Init(void)
     s_st.mask      = 0u;
     s_st.lost      = 0u;
     s_st.crossing  = 0u;
+    s_st.corner    = 0u;
     s_st.err       = 0.0f;
     s_st.turn      = 0.0f;
     s_st.base_now  = 0;
@@ -208,6 +227,19 @@ void APP_Car_Init(void)
     BSP_Motor_Stop();
 }
 
+/**
+  * @brief  清掉转角状态机的所有状态
+  * @note   启停、丢线恢复、超时退回时都要调一次，
+  *         否则会带着上一次的"转角记忆"进入新的行驶
+  */
+static void car_corner_reset(void)
+{
+    s_corner     = CORNER_NONE;
+    s_corner_dir = 0;
+    s_corner_ms  = 0u;
+    s_white_ms   = 0u;
+}
+
 void APP_Car_Start(void)
 {
     /* 清零所有计时与积分：上一次跑车留下的积分存量如果带到这一次，
@@ -220,6 +252,7 @@ void APP_Car_Start(void)
     s_alert_cnt  = 0u;
     s_ramping    = 1u;
     s_last_dir   = 1;
+    car_corner_reset();
     s_pid_stale  = 0u;
     s_last_tick  = HAL_GetTick();   /* dt 基准重新起算，避免把启动前的空档算进来 */
 
@@ -255,6 +288,7 @@ void APP_Car_Stop(void)
     s_st.base_now = 0;
     s_st.lost     = 0u;
     s_st.crossing = 0u;
+    s_st.corner   = 0u;
 }
 
 void APP_Car_Brake(void)
@@ -269,6 +303,7 @@ void APP_Car_Brake(void)
     s_st.base_now = 0;
     s_st.lost     = 0u;
     s_st.crossing = 0u;
+    s_st.corner   = 0u;
 }
 
 void APP_Car_ToggleRun(void)
@@ -293,6 +328,17 @@ uint8_t APP_Car_GetState(void)
 const APP_CarStatus_t *APP_Car_GetStatus(void)
 {
     return &s_st;
+}
+
+const char *APP_Car_CornerName(uint8_t corner)
+{
+    /* 给屏幕用：一眼看出现在是不是在转角流程里。
+       长度都对齐到 5 个字符，免得屏幕上的字左右乱跳 */
+    switch (corner) {
+    case CORNER_ARMED: return "ARM  ";      /* 已探到转角，保持直行中 */
+    case CORNER_TURN:  return "TURN ";      /* 到位急转中 */
+    default:           return "-----";
+    }
 }
 
 const char *APP_Car_StateName(uint8_t state)
@@ -346,6 +392,10 @@ void APP_Car_Update(void)
        不需要重新编译。改的只是方向极性，运行中改也安全 */
     BSP_Motor_SetInvert(g_param.motor_l_inv, g_param.motor_r_inv);
 
+    /* ★ 探头极性同样每拍同步（理由和上面一样：菜单里一拨立刻生效，
+       在 SENSOR CHECK 页能马上看到方框对没对） */
+    BSP_Track_SetActiveLow(g_param.act_low);
+
     /* 遥测每拍都刷新（待机时屏幕上也有转速看） */
     car_refresh_telemetry();
 
@@ -368,11 +418,11 @@ void APP_Car_Update(void)
     s_st.crossing = all_black;
 
     /* ---- ② 误差归一化 ----
-       BSP_Track_GetError() 在丢线时返回上一次的有效误差（不是 0），
-       所以这一步不会因为丢线而突然变成"车正好居中"。
-       注：下面丢了线也会用固定转向量覆盖，这里只是为了状态显示和
-       那一小段 60ms 的"疑似丢线"缓冲期能平滑过渡 */
-    e = BSP_Track_GetError() / TRACK_ERROR_MAX;
+       ★ 用"排除最外侧"的版本：最外那几路是转角探测器，不参与循迹误差。
+         它们混进来会让车在逼近转角时突然得到一个满格误差然后猛打方向。
+         BSP_Track_GetErrorExclEdge() 在中间几路都没压到线时沿用上次的有效误差
+       （不是 0），所以丢线瞬间也不会被当成"正好居中" */
+    e = BSP_Track_GetErrorExclEdge(g_param.edge_n) / TRACK_ERROR_MAX;
 
     /* 转向取反开关：接线/装配导致左右反了，在菜单里改 STEERINV=1 即可，
        不用把车拆开重焊 */
@@ -387,6 +437,136 @@ void APP_Car_Update(void)
         s_last_dir = 1;
     } else if (e < -0.05f) {
         s_last_dir = -1;
+    }
+
+    /* ======================================================================
+     * ② 转角模式：转角检测 → 保持直行 → 到位急转
+     * ----------------------------------------------------------------------
+     * 【为什么需要这一套（大车 + 窄阵列的必然选择）】
+     *   8 路探头阵列就那么宽，直线上最外侧的两路永远压不到线；
+     *   一旦压到，就说明前方有转角（横向的线扫过来了）。
+     *
+     *   如果用 PID 连续跟：车逼近转角 → 最外侧探头一亮 → 误差瞬间拉到满格
+     *   → 转向立刻打到底 → 车头甩过去、线又被另一侧的探头扫到
+     *   → 再反着打回来 …… 于是"边转边看"变成来回甩，大车尤其明显。
+     *
+     *   换成"转角模式"之后：
+     *     ① 最外侧探头一亮  → 记下是哪一侧，之后【不再转向】，保持直行
+     *        （直行段很短，就是让车把转角的最后几厘米走完）
+     *     ② 车头全部探头都不见黑线 → 说明转角正好到了车身下方，
+     *        此刻原地转一整圈的落点最合适 → 按①记下的方向做一次急转
+     *     ③ 急转中一旦探头重新见到线 → 立刻交回 PID 正常循迹
+     *
+     *   本质上是把"连续跟踪"换成"先判断、再执行"：
+     *   判断需要时间，而大车最缺的就是时间，所以先直行、把判断做完再动方向。
+     *   EDGEN = 0 时整套逻辑关闭，回到原来的连续 PID 循迹。
+     * ====================================================================== */
+    if (g_param.edge_n > 0u) {
+        uint8_t  n = g_param.edge_n;
+        uint8_t  edge_left;
+        uint8_t  edge_right;
+
+        /* 保护：最多把左右各 3 路当探测器，留 2 路给循迹 */
+        if (n > 3u) {
+            n = 3u;
+        }
+        edge_left  = (uint8_t)((1u << n) - 1u);                          /* bit0..n-1 */
+        edge_right = (uint8_t)(((1u << n) - 1u) << (TRACK_SENSOR_NUM - n));/* 最右 n 位 */
+
+        switch (s_corner) {
+        case CORNER_NONE:
+        {
+            /* 未压线的常态：两侧一起看，谁先亮就认为等一下要往哪边转 */
+            int8_t dir = 0;
+
+            if ((s_st.mask & edge_left) != 0u) {
+                dir = -1;               /* 线出现在左侧 → 等一下往左转 */
+            } else if ((s_st.mask & edge_right) != 0u) {
+                dir = 1;
+            }
+
+            if (dir != 0) {
+                /* ★★ STEERINV 必须在这里也生效（这是个 bug 的修补）★★
+                 *   STEERINV 的作用是"把整车的转向左右对调"，用来纠正
+                 *   "两个电机在 TB6612 上的左右接反了"这类装配问题。
+                 *   而这里记录的是"等一下往哪边急转"——它当然也必须跟着对调，
+                 *   否则会出现最难受的组合：
+                 *       正常循迹按 STEERINV 修好了（能跟着线走），
+                 *       一到转角却又朝反方向急转（因为这里没跟着翻）。
+                 *   两处方向必须由同一个开关说了算。
+                 *
+                 *   注意这里用的是"原始掩码的哪一侧"，不是误差 e：
+                 *   转角判据关心的是"线出现在阵列的哪一端"，与权重无关。 */
+                if (g_param.steer_inv != 0u) {
+                    dir = (int8_t)(-dir);
+                }
+
+                s_corner     = CORNER_ARMED;
+                s_corner_dir = dir;
+                s_corner_ms  = 0u;
+                s_white_ms   = 0u;
+#if CAR_CORNER_BEEP
+                BSP_Buzzer_BeepAsync(60u);      /* 提示音：探测到转角 */
+#endif
+            }
+            break;
+        }
+
+        case CORNER_ARMED:
+            /* 保持直行中，等"全部探头都不见线"。
+               ★ 这里必须等全白，不能一看到中间探头没线就走 ——
+                 要的是"整条阵列都越过转角"，那才是车头刚好处在转角正上方 */
+            s_corner_ms = (uint16_t)(s_corner_ms + dt_ms);
+
+            if (s_st.mask == 0u) {
+                s_white_ms = (uint16_t)(s_white_ms + dt_ms);
+                if (s_white_ms >= CAR_CORNER_WHITE_MS) {
+                    s_corner    = CORNER_TURN;
+                    s_corner_ms = 0u;
+#if CAR_CORNER_BEEP
+                    BSP_Buzzer_BeepAsync(200u);  /* 长一点的音：开始急转 */
+#endif
+                }
+            } else {
+                s_white_ms = 0u;
+            }
+
+            /* ★ "这不是转角，只是车偏了" 的即时判据：
+               本车的黑线比较宽（居中时会同时压住中间 4 路），
+               所以车一旦偏得多一点，最外侧探头也会亮 —— 那不是转角，
+               是漂移。区分方法看【中间几路】的误差：
+                 · 真转角：车头正对转角，线的重心还在中间 → |误差| 很小
+                 · 漂移  ：线整体偏到一侧      → |误差| 明显大于 0
+               漂移时如果还傻乎乎直行 1.5 秒，车就冲出赛道了，
+               所以这里立刻退回正常循迹，交给 PID 把车拉回来。 */
+            if ((s_corner == CORNER_ARMED)
+                && ((e > CAR_CORNER_ARM_ERR) || (e < -CAR_CORNER_ARM_ERR))) {
+                s_corner = CORNER_NONE;
+            }
+
+            /* 超时保护：外侧亮了半天也等不到全白，说明那不是转角
+               （可能是误触发、也可能是缓弯），退回正常循迹，别一直直着冲 */
+            if ((s_corner == CORNER_ARMED) && (s_corner_ms > CAR_CORNER_ARM_TIMEOUT_MS)) {
+                s_corner = CORNER_NONE;
+            }
+            break;
+
+        case CORNER_TURN:
+        default:
+            s_corner_ms = (uint16_t)(s_corner_ms + dt_ms);
+
+            /* 探头重新见到线 = 已经转到线上了，交回 PID */
+            if (s_st.mask != 0u) {
+                car_corner_reset();
+            } else if (s_corner_ms > g_param.pivot_ms) {
+                /* 转了太久还是找不到线：别一直原地转，
+                   交回正常逻辑（丢线找线），至少还有个方向感 */
+                car_corner_reset();
+            }
+            break;
+        }
+    } else {
+        s_corner = CORNER_NONE;     /* 模式关闭时状态永远归零 */
     }
 
     /* ---- ③ 路况修正：十字 ---- */
@@ -412,11 +592,24 @@ void APP_Car_Update(void)
     }
     s_st.lost    = (s_lost_acc >= CAR_LOST_DEBOUNCE_MS) ? 1u : 0u;
     s_st.lost_ms = s_lost_acc;
+    s_st.corner  = s_corner;
 
-    /* ---- ④ 转向环 ---- */
+    /* ---- ⑤ 转向环（按转角状态分三种走法）---- */
     car_pid_sync();
 
-    if (s_st.lost != 0u) {
+    if (s_corner == CORNER_ARMED) {
+        /* 【保持直行】转向量强制 0。
+           ★ 顺手把 PID 复位：这一小段直行里误差可能被转角那条横线
+             搅得乱七八糟，复位之后重新上线时不会带着"历史包袱"猛打一下 */
+        BSP_PID_Reset(&s_pid_turn);
+        s_pid_stale = 0u;
+        turn        = 0.0f;
+    } else if (s_corner == CORNER_TURN) {
+        /* 【到位急转】按当初记住的方向，把转向量直接打到 PIVOT。
+           基础速度在下面被压成 CREEP 倍 —— 大差速 + 小前进 = 一小段急弧，
+           既能原地拐急弯，又保证探头能把线"扫"回来 */
+        turn = (float)g_param.pivot_spd * (float)s_corner_dir;
+    } else if (s_st.lost != 0u) {
         /* 丢线期间不跑 PID：
            误差已经没有意义了，继续积分只会攒下一堆将在重新找到线时
            突然释放的"存量"，车会猛地一拐。改用固定转向量猛打方向找线。 */
@@ -432,8 +625,24 @@ void APP_Car_Update(void)
         turn = BSP_PID_UpdateErr(&s_pid_turn, e, dt_s);
     }
 
-    /* ---- ⑤ 基础速度规划 ---- */
+    /* ---- ⑥ 基础速度规划 ---- */
     base = (float)g_param.base_speed;
+
+    /* 转角急转：基础速度压到 CREEP 倍。必须放在斜坡之前算，
+       因为它会直接决定"这一拍到底给多少前进量" */
+    if (s_corner == CORNER_TURN) {
+        base = (float)g_param.pivot_spd * CAR_CORNER_CREEP;
+        s_st.base_now = (int16_t)(base + 0.5f);
+        s_st.turn     = turn;
+        l = car_clamp_speed(base + turn);
+        r = car_clamp_speed(base - turn);
+        s_st.spd_l = l;
+        s_st.spd_r = r;
+        BSP_Motor_SetSpeed(l, r);
+
+        /* 急转期间不做丢线停车判定 —— 此刻"全白"正是我们要的状态 */
+        return;
+    }
 
     if ((g_param.ramp_ms > 0u) && (s_run_ms < (uint32_t)g_param.ramp_ms)) {
         /* 起步斜坡：从 0 线性爬到 BASE SPD。
@@ -455,6 +664,34 @@ void APP_Car_Update(void)
         s_ramping = 1u;
     } else {
         s_ramping = 0u;
+    }
+
+    /* ★★ 大偏差自动减速 —— 大车/履带车能不能循好线的关键一条 ★★
+     *
+     *   循迹是"看见了才开始纠"。车偏得越远，说明纠得越晚；
+     *   这时候如果还保持全速，等转向环把车头掰回来，探头早就越过线了。
+     *   8 路探头阵列就那么宽（前瞻距离很短），大车一冲就是几十厘米 ——
+     *   现象就是"还没转过来就已经过线、驶出路线"。
+     *
+     *   减速把"看见 → 越过线"这段时间直接拉长：
+     *       基速 = BASESPD × (1 - SLOWK × |误差|)
+     *     误差 0   → 全速（直道完全不受影响）
+     *     误差 0.5 → 约 70% 速度（SLOWK=0.6）
+     *     误差 1.0 → 约 40% 速度（误差满格 = 线已经压到阵列最边上）
+     *
+     *   ★ 用"归一化误差的绝对值"，不用 PID 的输出：
+     *     PID 输出已经限过幅，拿它减速会变成"弯道里恒为最低速"；
+     *     用 |误差| 则和"车偏了多少"严格成正比，直观、可预测。
+     *   ★ 下限 25%：再怎么偏也不能把车停下 —— 停住的车是没法转向的
+     *     （履带车原地转向靠两边速度差，速度全归零就只剩摩擦了）。 */
+    if (g_param.slow_k > 0.0f) {
+        float mag = (e > 0.0f) ? e : -e;
+        float k   = 1.0f - (g_param.slow_k * mag);
+
+        if (k < CAR_SLOW_MIN_SCALE) {
+            k = CAR_SLOW_MIN_SCALE;
+        }
+        base = base * k;
     }
 
     if (s_st.lost != 0u) {
@@ -503,7 +740,9 @@ void APP_Car_Update(void)
          完全符合"我要它一直走"的预期。
          等循迹整定好了，想让它在冲出赛道时自动停下来，
          再把菜单里的 LOSTms 调成 800~1500 即可。 */
-    if (g_param.lost_stop_ms > 0u) {
+    /* ★ 转角急转期间不做丢线停车判定：那一刻"全白"是正确的中间状态，
+       不是故障。否则一开 LOSTms 就会在转角中间把车刹住 */
+    if ((g_param.lost_stop_ms > 0u) && (s_corner == CORNER_NONE)) {
         if ((s_st.lost != 0u) && (s_lost_acc >= g_param.lost_stop_ms)) {
             car_halt(APP_CAR_LOST);
             return;

@@ -51,14 +51,68 @@ APP_Param_t g_param;
  * ========================================================================== */
 #define DEF_TURN_KP         1200.0f     /* 误差 1.0（最边上）→ 转向量 1200 */
 #define DEF_TURN_KI         0.0f        /* 循迹一般不需要积分 */
-#define DEF_TURN_KD         180.0f      /* 先用小一点的 D，避免传感器量化噪声被放大 */
+/* ★ KD 的单位是"每 (误差/秒)"，不是"每格误差"，所以它天生比 KP 小一两个数量级。
+ *   采样周期只有 10ms：误差跳一格(0.14) → 变化率 14/秒 → D = KD × 14
+ *     KD=180 → D≈2500（满量程才 3600）：D 长期顶满，P 被淹没，
+ *               车会"一看见误差跳变就往反方向甩"
+ *     KD=60  → D≈840：是"够用的阻尼"，不是"抢方向盘的乘客"
+ *   再加上 PID_D_LIMIT_RATIO（D 项最多占输出一半）双保险。 */
+#define DEF_TURN_KD         60.0f
 #define DEF_DEAD_ZONE       0.08f       /* 归一化误差死区，约等于半路的宽度 */
+/* ★ 大偏差自动减速系数（0~1.5）。
+ *      实际基速 = BASESPD × (1 - SLOWK × |误差|)，且不低于 25%
+ *   为什么大车必须有它：
+ *     循迹是"看见了才纠"。车偏得越远说明纠得越晚；这时候若还保持全速，
+ *     等转向环把车头掰回来，探头早就越过线了（8 路阵列就那么宽，
+ *     前瞻距离很短）—— 现象就是你说的"还没转过来就过线、驶出路线"。
+ *     减速等于把"看见 → 越过线"这段时间拉长，转向环才有机会干活。
+ *   0.6 是温和起点；弯特别急可以加到 1.0（误差满格时只剩 40% 速度）。 */
+/* ★ 转角模式：最外侧左右各几路只当"转角探测器"，不参与循迹误差。
+ *   0 = 关闭，1 = 各 1 路（推荐起点）。
+ *   为什么需要它：大车 + 窄阵列时，最外两路在直线上永远不亮，
+ *   一亮就说明前方是转角。让它们参与误差计算，车会在逼近转角时
+ *   提前得到一个很大的误差然后猛打方向 —— 这就是"边缘一读到就甩"的根。
+ *   把它们摘出来当"转角雷达"用，直道更稳、转角交给状态机专门处理。 */
+/* ★ 探头极性：默认取自 bsp_config.h 的宏（实车实测 = 压线读高电平） */
+#define DEF_ACT_LOW         TRACK_ACTIVE_LOW
+
+#define DEF_EDGE_N          1
+/* 转角急转时外侧履带的速度。大车要够劲儿，但又不能大到把车掀了 */
+#define DEF_PIVOT_SPD       1600
+/* 急转最长持续时间。超时就交回正常逻辑（丢线找线），避免原地转圈停不下来 */
+#define DEF_PIVOT_MS        2500
+
+#define DEF_SLOW_K          0.6f
 
 #define DEF_BASE_SPEED      1300        /* 满量程 3599，约 36%，桌面赛道够快也够稳 */
 #define DEF_TURN_LIMIT      1500        /* 转向量上限：最狠时左右差 3000 */
-#define DEF_INNER_MIN_SPD   250         /* 内轮最低速，防止急弯内侧轮停转导致顿挫 */
+/* ★ 内轮最低速：履带车/大车建议 0，也就是【允许内侧履带反转】。
+ *   轮式小车怕内轮停转造成顿挫，所以给 250 的底；
+ *   但履带车靠"搓地"转向，内轮反转才能急拐 ——
+ *   给 250 等于把最有力的那部分转向能力锁掉，大车会转不过来。 */
+#define DEF_INNER_MIN_SPD   0
 #define DEF_RAMP_MS         400         /* 0 → 全速用 0.4 秒，起步不打滑 */
-#define DEF_STEER_INV       0           /* 转向差速方向不对时改 1 */
+/* ★★★ 转向差速取反：默认 1（实车实测）★★★
+ *
+ * 【它管什么】
+ *   把"转向差速的方向"整个对调：本该左轮慢右轮快的场合，变成左轮快右轮慢。
+ *   用途是纠正两类装配问题：
+ *     · 两个电机在 TB6612 上的左右接反了（代码里的"左"其实是车的右侧）
+ *     · 探头阵列装反了（索引 0 其实在车的右边）
+ *   这两种情况都会让"误差为负 → 该左转"变成"车往右拐"，现象就是
+ *   "车明明偏了却朝远离线的方向走"。本车实测就是这一类问题。
+ *
+ * 【它和 MLINV / MRINV 的区别（千万别混）】
+ *   MLINV/MRINV 管【单个电机转的方向】：错了的表现是"两个轮子都被命令前进，
+ *     车却原地打转"，或者"两个轮子都往后走"。
+ *   STEERINV    管【左右两边的分配】：错了的表现是"车能往前开、也能走直线，
+ *     但纠偏时总是朝反方向拐"。
+ *   前者错了车走不了直线，后者错了车走得了直线但循不了线 —— 症状完全不同。
+ *
+ * 【改错了会怎样】
+ *   本来是对的、却把它设成 1 → 车会朝远离线的方向冲出去（很快就看得出来）。
+ *   所以在菜单里拨一下就能试，不用重编重烧。 */
+#define DEF_STEER_INV       1
 /* ★ 电机转向取反的出厂默认值直接取自 bsp_config.h 的宏。
    这样"改宏重编"和"在菜单里拨"共用同一个初始值，两套用法不会打架 */
 #define DEF_MOTOR_L_INV     MOTOR_L_INVERT
@@ -106,8 +160,14 @@ const APP_ParamItem_t g_param_table[] = {
      *        命令两轮都前进时车原地打转 = 有一个轮子的正负极接反了
      *     2) 两个轮子都对了，再上线跑 —— 如果越纠越偏，才动 STEERINV
      *        （它管的是"看到线在左边该往左拐"这个方向，不是电机本身） */
+    { "ACTLOW",   offsetof(APP_Param_t, act_low),      PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
     { "MLINV",    offsetof(APP_Param_t, motor_l_inv),  PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
     { "MRINV",    offsetof(APP_Param_t, motor_r_inv),  PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
+    { "SLOWK",    offsetof(APP_Param_t, slow_k),       PTYPE_F32,  2,   0.05f,   0.0f,     1.50f },
+    /* ---- 转角模式（大车/履带车专用，详见 app_car.c 里的状态机说明） ---- */
+    { "EDGEN",    offsetof(APP_Param_t, edge_n),       PTYPE_U8,   0,   1.0f,    0.0f,     3.0f },
+    { "PIVOT",    offsetof(APP_Param_t, pivot_spd),    PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
+    { "PIVOTms",  offsetof(APP_Param_t, pivot_ms),     PTYPE_U16,  0, 100.0f,  200.0f,  5000.0f },
     { "STEERINV", offsetof(APP_Param_t, steer_inv),    PTYPE_U8,   0,   1.0f,    0.0f,     1.0f },
     /* ------------------------------ 转向环 ------------------------------ */
     { "KP",       offsetof(APP_Param_t, turn_kp),      PTYPE_F32,  0,  50.0f,    0.0f,  4000.0f },
@@ -215,6 +275,11 @@ static void param_fill_default(APP_Param_t *p)
     p->steer_inv     = (uint8_t)DEF_STEER_INV;
     p->motor_l_inv   = (uint8_t)DEF_MOTOR_L_INV;
     p->motor_r_inv   = (uint8_t)DEF_MOTOR_R_INV;
+    p->act_low       = (uint8_t)DEF_ACT_LOW;
+    p->edge_n        = (uint8_t)DEF_EDGE_N;
+    p->pivot_spd     = (int16_t)DEF_PIVOT_SPD;
+    p->pivot_ms      = (uint16_t)DEF_PIVOT_MS;
+    p->slow_k        = DEF_SLOW_K;
 
     p->lost_turn    = (int16_t)DEF_LOST_TURN;
     p->lost_stop_ms = (uint16_t)DEF_LOST_STOP_MS;

@@ -227,7 +227,22 @@ float BSP_PID_UpdateErr(BSP_PID_t *pid, float err, float dt_s)
     /* ---- 5. 合成与限幅 ---- */
     pid->p_term = p;
     pid->i_term = pid->integral;
+
+    /* ★ D 项单独限幅，理由见 bsp_config.h 里 PID_D_LIMIT_RATIO 的详细说明：
+       误差跳一格就能让 D 项爆表（采样周期只有 10ms，变化率被放大 100 倍），
+       一旦爆表，整个输出就被 D 项一个人顶到限幅，P 项完全不起作用 ——
+       控制器退化成"看见误差跳变就往反方向打死"。
+       夹到输出的一半之后，D 只负责阻尼，方向仍然由 P 项说了算。 */
     pid->d_term = pid->kd * pid->d_filt;
+    if (pid->out_limit > 0.0f) {
+        float d_max = pid->out_limit * PID_D_LIMIT_RATIO;
+
+        if (pid->d_term > d_max) {
+            pid->d_term = d_max;
+        } else if (pid->d_term < -d_max) {
+            pid->d_term = -d_max;
+        }
+    }
 
     out = pid->p_term + pid->i_term + pid->d_term;
     out = pid_clamp(out, pid->out_limit);

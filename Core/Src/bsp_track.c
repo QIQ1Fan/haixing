@@ -57,6 +57,20 @@ uint8_t BSP_Track_GetRawMask(void)
     return BSP_GPIO_ReadTrackRaw();
 }
 
+/* 当前生效的极性。出厂值取自 bsp_config.h 的宏，
+   运行期可以被 BSP_Track_SetActiveLow() 改写（app_car 每拍从参数同步） */
+static uint8_t s_active_low = (uint8_t)TRACK_ACTIVE_LOW;
+
+void BSP_Track_SetActiveLow(uint8_t active_low)
+{
+    s_active_low = (active_low != 0u) ? 1u : 0u;
+}
+
+uint8_t BSP_Track_GetActiveLow(void)
+{
+    return s_active_low;
+}
+
 uint8_t BSP_Track_GetMask(void)
 {
     uint8_t raw = BSP_GPIO_ReadTrackRaw();
@@ -66,17 +80,20 @@ uint8_t BSP_Track_GetMask(void)
     for (i = 0u; i < TRACK_SENSOR_NUM; i++) {
         uint8_t level = (uint8_t)((raw >> i) & 0x01u);
 
-        /* 把"引脚电平"翻译成"是否压线"。极性由 TRACK_ACTIVE_LOW 决定。
-           用 #if 而不是 if：编译期就把不需要的分支去掉，运行期零开销 */
-#if TRACK_ACTIVE_LOW
-        if (level == 0u) {          /* 低电平 = 压线（常见） */
-            mask |= (uint8_t)(1u << i);
+        /* 把"引脚电平"翻译成"是否压线"。
+           ★ 以前这里是 #if 编译期分支，现在改成运行期判断：
+             极性是"调试期间最常改错、又最需要边看边改"的一项，
+             做成参数之后在 SENSOR CHECK 页里拨一下就能看到方框对不对，
+             不用重编重烧。多出来的那一次判断开销可以忽略。 */
+        if (s_active_low != 0u) {
+            if (level == 0u) {          /* 压线读到低电平 */
+                mask |= (uint8_t)(1u << i);
+            }
+        } else {
+            if (level != 0u) {          /* 压线读到高电平 */
+                mask |= (uint8_t)(1u << i);
+            }
         }
-#else
-        if (level != 0u) {          /* 高电平 = 压线 */
-            mask |= (uint8_t)(1u << i);
-        }
-#endif
     }
     return mask;
 }
@@ -134,6 +151,40 @@ float BSP_Track_GetError(void)
     /* 除以压线个数求平均，是为了让"压 1 路"和"压 3 路"算出来的
        误差量级一致，PID 参数不用随压线路数变化。 */
     s_last_error = sum / (float)n;
+    return s_last_error;
+}
+
+float BSP_Track_GetErrorExclEdge(uint8_t n)
+{
+    uint8_t  mask;
+    float    sum = 0.0f;
+    uint8_t  cnt = 0u;
+    uint32_t i;
+
+    /* 保护：最多排除到只剩中间一路，再排就没探头可用了 */
+    if (n >= (uint8_t)(TRACK_SENSOR_NUM / 2u)) {
+        n = (uint8_t)((TRACK_SENSOR_NUM / 2u) - 1u);
+    }
+
+    mask = BSP_Track_GetMask();
+
+    /* 只累加 [n, TRACK_SENSOR_NUM-n) 这一段，也就是中间那几路。
+       权重仍用它们自己的（±5、±3 …），所以误差量程跟着变小 ——
+       这正是我们要的"直道更柔"的效果 */
+    for (i = (uint32_t)n; i < ((uint32_t)TRACK_SENSOR_NUM - (uint32_t)n); i++) {
+        if ((mask >> i) & 0x01u) {
+            sum += s_weight[i];
+            cnt++;
+        }
+    }
+
+    /* 中间几路一个都没压到：和 GetError() 一样沿用上次的有效误差，
+       绝不返回 0（返回 0 会被 PID 当成"正好居中"，车会直着冲出去） */
+    if (cnt == 0u) {
+        return s_last_error;
+    }
+
+    s_last_error = sum / (float)cnt;
     return s_last_error;
 }
 

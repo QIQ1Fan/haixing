@@ -49,8 +49,24 @@ void BSP_Track_Init(void);
 /**
   * @brief  取"是否压线"的位掩码 —— 最常用
   * @retval bit0..bit7 依次对应传感器 0..7，位为 1 表示压到黑线
-  * @note   极性由 bsp_config.h 的 TRACK_ACTIVE_LOW 决定，已经转换好了
+  * @note   极性由"运行期开关"决定（出厂值 = bsp_config.h 的 TRACK_ACTIVE_LOW），
+  *         已经转换好了。极性错了的时候现象是"整条掩码反了过来"：
+  *         车压在黑线上，掩码却在离线的那几路为 1。
   */
+
+/**
+  * @brief  ★ 设置探头极性（运行期）
+  * @param  active_low 1 = 压到黑线读到低电平；0 = 压到黑线读到高电平
+  * @note   做成运行期接口的理由和电机取反一样：极性错了要重编重烧太慢，
+  *         而在 OLED 的 SENSOR CHECK 页里拨一下就能立刻看到方框对不对。
+  *         出厂默认值来自 bsp_config.h 的 TRACK_ACTIVE_LOW，
+  *         实际使用值来自 app_param 的 ACTLOW 参数（app_car 每拍同步）。
+  */
+void BSP_Track_SetActiveLow(uint8_t active_low);
+
+/** @brief 取回当前极性设置（1 = 压线读低） */
+uint8_t BSP_Track_GetActiveLow(void);
+
 uint8_t BSP_Track_GetMask(void);
 
 /**
@@ -74,6 +90,24 @@ uint8_t BSP_Track_CountActive(void);
   *         返回上次的值则能保持原来的转向趋势，继续把线找回来。
   */
 float BSP_Track_GetError(void);
+
+/**
+  * @brief  ★ 只用"中间那几路"算位置误差，最外侧 n 路不参与
+  * @param  n 要排除的外侧路数（左右各排除 n 路）。n = 0 时等价于 GetError()
+  * @retval 加权平均误差，量纲和 GetError() 一样
+  *
+  * 【为什么要这个函数】
+  *   大车 + 窄阵列的组合下，最外侧那两路其实是"转角探测器"而不是"循迹探头"：
+  *   直线上它们根本压不到线，一旦压到就说明前方是转角。
+  *   把这几个"只在转角才亮"的探头混进加权平均里，车在逼近转角时会突然
+  *   得到一个很大的误差，然后提前、过猛地打方向 —— 这正是
+  *   "边缘探头一读到线就往边上甩"的来源。
+  *
+  *   排除掉它们之后，中间几路只负责"车有没有走在线上"，
+  *   误差量程变小、响应变柔，直道反而更稳；转角交给 app_car 的
+  *   "转角模式"专门处理（见 app_car.c 的状态机）。
+  */
+float BSP_Track_GetErrorExclEdge(uint8_t n);
 
 /**
   * @brief  归一化位置误差
