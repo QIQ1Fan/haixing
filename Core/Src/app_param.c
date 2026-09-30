@@ -82,7 +82,11 @@ APP_Param_t g_param;
 
 #define DEF_SLOW_K          0.6f
 
-#define DEF_BASE_SPEED      1300        /* 满量程 3599，约 36%，桌面赛道够快也够稳 */
+/* ★ 循迹/直行的基础速度：1950（满量程 3599，约 54%）。
+ *   注意它同时也是"路线脚本里 Route_Straight / Route_LineFollow 的速度"。
+ *   车速越快，同样的误差留给转向的时间就越短 —— 如果发现过弯跟不上，
+ *   先降这个值；SLOWK（大偏差自动减速）也会在弯道里自动把它压下来。 */
+#define DEF_BASE_SPEED      1950
 #define DEF_TURN_LIMIT      1500        /* 转向量上限：最狠时左右差 3000 */
 /* ★ 内轮最低速：履带车/大车建议 0，也就是【允许内侧履带反转】。
  *   轮式小车怕内轮停转造成顿挫，所以给 250 的底；
@@ -183,8 +187,11 @@ const APP_ParamItem_t g_param_table[] = {
     /* ------------------------------- 保护 ------------------------------- */
     { "STALLms",  offsetof(APP_Param_t, stall_ms),     PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
-    { "LEGUP",    offsetof(APP_Param_t, leg_up_deg),   PTYPE_U8,   0,   5.0f,    0.0f,   180.0f },
-    { "LEGDN",    offsetof(APP_Param_t, leg_down_deg), PTYPE_U8,   0,   5.0f,    0.0f,   180.0f },
+    /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
+       角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
+       1 度正好；要快速大范围挪动就长按（长按/连发 = 5 倍步长 = 5 度/次） */
+    { "LEGUP",    offsetof(APP_Param_t, leg_up_deg),   PTYPE_U8,   0,   1.0f,    0.0f,   180.0f },
+    { "LEGDN",    offsetof(APP_Param_t, leg_down_deg), PTYPE_U8,   0,   1.0f,    0.0f,   180.0f },
 };
 
 const uint8_t g_param_count = (uint8_t)(sizeof(g_param_table) / sizeof(g_param_table[0]));

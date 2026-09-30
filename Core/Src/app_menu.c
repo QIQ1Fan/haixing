@@ -160,6 +160,7 @@ static uint8_t  s_param_top = 0u;                   /* 参数列表滚动窗口�
 
 static uint8_t  s_edit_idx  = 0u;                   /* 正在编辑的参数索引 */
 static float    s_edit_orig = 0.0f;                 /* 进编辑页时的原值，BACK 用它还原 */
+static uint8_t  s_edit_back_leg = 0u;               /* 1 = 编辑结束后回支撑脚页（从那儿进来的）*/
 
 static uint8_t  s_step_mult = 1u;                   /* 步长倍率：短按 1，长按/连发 5 */
 
@@ -618,14 +619,25 @@ static void menu_draw_param_edit(void)
  * -------------------------------------------------------------------------- */
 static void menu_draw_leg(void)
 {
-    static const char *const items[3] = { "LEG DOWN", "LEG UP", "BACK" };
+    static const char *const items[3] = { "EDIT UP", "EDIT DOWN", "BACK" };
     const char *state;
     uint8_t i;
 
     BSP_OLED_DrawString(0u, 0u, "SUPPORT LEG");
 
-    BSP_OLED_Printf(0u, 1u, "angle  %3u", (unsigned int)APP_Leg_GetAngle());
-    BSP_OLED_Printf(0u, 2u, "target %3u", (unsigned int)APP_Leg_GetTarget());
+    /* ★ 第一行同时给出"角度"和"脉宽"：
+       角度是给人看的，脉宽(us)才是舵机真正收到的东西 ——
+       标定或换舵机时，脉宽比角度更有参考价值（比如"我的舵机 180° 要 2600us"，
+       那就直接去 bsp_config.h 改 SERVO_PULSE_MAX_US） */
+    BSP_OLED_Printf(0u, 1u, "now %3u  %4u us",
+                    (unsigned int)APP_Leg_GetAngle(),
+                    (unsigned int)BSP_Servo_GetPulseUs());
+
+    /* ★ 第二行把"存着的两个位置"直接摆出来：
+       调角度时最需要对照的就是"现在存的是多少"，不用再翻参数列表 */
+    BSP_OLED_Printf(0u, 2u, "saved UP%3u DN%3u",
+                    (unsigned int)g_param.leg_up_deg,
+                    (unsigned int)g_param.leg_down_deg);
 
     /* 三个状态分开显示比一个"到位/没到位"更有信息量：
        MOVING 说明斜坡还在走，这时候反复按按键是没有意义的 */
@@ -636,7 +648,8 @@ static void menu_draw_leg(void)
     } else {
         state = "UP";
     }
-    BSP_OLED_Printf(0u, 3u, "state  %s", state);
+    BSP_OLED_Printf(0u, 3u, "target %3u %s",
+                    (unsigned int)APP_Leg_GetTarget(), state);
 
     for (i = 0u; i < 3u; i++) {
         BSP_OLED_Printf(0u, (uint8_t)(4u + i), "%c %s",
@@ -961,10 +974,11 @@ static uint8_t menu_key_param_list(uint8_t key, uint8_t evt)
 
     if (key == (uint8_t)MKEY_OK) {
         /* 进编辑页之前先把原值抄下来：BACK 时要靠它"放弃修改" */
-        s_edit_idx  = s_param_sel;
-        s_edit_orig = APP_Param_GetByIndex(s_edit_idx);
-        s_step_mult = 1u;
-        s_page      = (uint8_t)UI_PARAM_EDIT;
+        s_edit_idx      = s_param_sel;
+        s_edit_orig     = APP_Param_GetByIndex(s_edit_idx);
+        s_step_mult     = 1u;
+        s_edit_back_leg = 0u;               /* 从参数列表进来的，回去也回列表 */
+        s_page          = (uint8_t)UI_PARAM_EDIT;
         return 1u;
     }
 
@@ -997,7 +1011,11 @@ static uint8_t menu_key_param_edit(uint8_t key, uint8_t evt)
     }
 
     if (key == (uint8_t)MKEY_OK) {
-        s_page = (uint8_t)UI_PARAM_LIST;    /* 完成，保留改动 */
+        /* 完成，保留改动。★ 回哪一页取决于从哪儿进来的：
+           从参数列表进来就回列表，从支撑脚页进来就回支撑脚页 */
+        s_page          = (s_edit_back_leg != 0u) ? (uint8_t)UI_LEG
+                                                 : (uint8_t)UI_PARAM_LIST;
+        s_edit_back_leg = 0u;
         return 1u;
     }
 
@@ -1006,7 +1024,9 @@ static uint8_t menu_key_param_edit(uint8_t key, uint8_t evt)
            这样"按错了键"是有救的，用户敢放心大胆地试 */
         APP_Param_SetByIndex(s_edit_idx, s_edit_orig);
         menu_sync_leg(s_edit_idx);
-        s_page = (uint8_t)UI_PARAM_LIST;
+        s_page          = (s_edit_back_leg != 0u) ? (uint8_t)UI_LEG
+                                                 : (uint8_t)UI_PARAM_LIST;
+        s_edit_back_leg = 0u;
         return 1u;
     }
 
@@ -1035,12 +1055,29 @@ static uint8_t menu_key_leg(uint8_t key, uint8_t evt)
     }
 
     if (key == (uint8_t)MKEY_OK) {
+        uint8_t idx = 0xFFu;
+
         if (s_leg_sel == 0u) {
-            APP_Leg_Down();     /* 走斜坡放下，不会"哐"一下顶起来 */
+            idx = APP_Param_FindByName("LEGUP");     /* 调"收起位"角度 */
         } else if (s_leg_sel == 1u) {
-            APP_Leg_Up();
+            idx = APP_Param_FindByName("LEGDN");     /* 调"放下位"角度 */
         } else {
             s_page = (uint8_t)UI_MENU;
+            return 1u;
+        }
+
+        if (idx < g_param_count) {
+            /* ★ 直接跳到那个参数的编辑页 —— 不在本页另做一套加减逻辑。
+               复用现成的编辑页有一串好处：
+                 · 步长、上下限、长按加速全都已经写好了，不用重复一遍
+                 · 编辑时支撑脚会实时跟着动（menu_sync_leg 的联动）
+                 · 少一套按键处理，就少一个"两处行为不一致"的坑
+               s_edit_back_leg 让编辑结束后回到本页，而不是参数列表 */
+            s_edit_idx      = idx;
+            s_edit_orig     = APP_Param_GetByIndex(idx);
+            s_step_mult     = 1u;
+            s_edit_back_leg = 1u;
+            s_page          = (uint8_t)UI_PARAM_EDIT;
         }
         return 1u;
     }

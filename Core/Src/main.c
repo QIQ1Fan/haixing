@@ -193,32 +193,46 @@ int main(void)
    *   1) BSP_UART_Init()    —— 最先。后面任何模块出问题，报错才打得出来
    *   2) BSP_GPIO_Init()    —— 所有纯 GPIO 引脚的底座，电机方向/循迹/按键
    *                            都靠它，必须在电机和循迹之前
-   *   3) BSP_Buzzer_Init()  —— 上电先保证蜂鸣器是静音的
-   *   4) BSP_Key_Init()     —— 按键状态清零
-   *   5) BSP_Track_Init()   —— 循迹（引脚已在第 2 步配好）
-   *   6) BSP_Encoder_Init() —— 编码器，给循迹控制提供转速
-   *   7) BSP_Servo_Init()   —— 支撑脚舵机的软件 PWM 时基 + 中断
-   *   8) BSP_Motor_Init()   —— 电机 PWM 起好、STBY 最后才使能，
+   *   1) BSP_UART_Init()    —— 最先。后面任何模块出问题，报错才打得出来
+   *   2) APP_Param_Init()   —— 读 Flash 参数。★ 提到这里是有原因的：
+   *                            它只读 Flash + 填内存，一个外设都不碰，
+   *                            所以可以安全地跑在最前面，让后面每一个模块
+   *                            一初始化就能拿到最终参数
+   *   3) BSP_GPIO_Init()    —— 所有纯 GPIO 引脚的底座
+   *   4) BSP_Buzzer_Init()  —— 上电先保证蜂鸣器是静音的
+   *   5) BSP_Key_Init()     —— 按键状态清零
+   *   6) BSP_Track_Init()   —— 循迹（引脚已在第 3 步配好）
+   *   7) BSP_Encoder_Init() —— 编码器，给循迹控制提供转速
+   *   8) BSP_Servo_Init()   —— 支撑脚舵机的软件 PWM 时基 + 中断
+   *   9) APP_Leg_Init()     —— ★ 紧跟舵机初始化，见下面的说明
+   *  10) BSP_Motor_Init()   —— 电机 PWM 起好、STBY 最后才使能，
    *                            避免上电瞬间电机乱冲
-   *   9) BSP_OLED_Init()    —— 它自带 100ms 上电等待，放最后不拖累别人
-   *  10) APP_Param_Init()   —— 读 Flash 参数。★ 必须在 Car/Leg 之前，
-   *                            它们要用参数决定初始行为和初始姿态
-   *  11) APP_Leg_Init()     —— 支撑脚摆到"收起"位
+   *  11) BSP_OLED_Init()    —— 它自带 100ms 上电等待，放最后不拖累别人
    *  12) APP_Car_Init()     —— 建 PID、清状态（不动电机）
    *  13) APP_Menu_Init()    —— 界面，最后，它要往屏幕上画第一帧
+   *
+   *  ★★ 为什么 APP_Leg_Init() 要紧贴着 BSP_Servo_Init() ★★
+   *   BSP_Servo_Init() 内部把初值写死成中位 1500us（90°），它并不知道
+   *   支撑脚该停在哪个角度 —— 那是参数 LEGUP 决定的。
+   *   如果按"舵机初始化 → 电机初始化 → OLED 初始化(内部 delay 100ms)
+   *   → 再读参数 → 才设角度"的老顺序走，舵机在上电头 100 多毫秒里
+   *   会一直收到 90° 的脉冲，然后才猛地甩到收起位 ——
+   *   现象就是"每次上电支撑脚都先抖一下"。
+   *   把参数提前读、把设角度紧跟舵机初始化之后，第一条脉冲就已经是
+   *   LEGUP，机构全程一动不动。
    * ================================================================== */
   BSP_UART_Init();
+  APP_Param_Init();
   BSP_GPIO_Init();
   BSP_Buzzer_Init();
   BSP_Key_Init();
   BSP_Track_Init();
   BSP_Encoder_Init();
   BSP_Servo_Init();
+  APP_Leg_Init();
   BSP_Motor_Init();
   BSP_OLED_Init();
 
-  APP_Param_Init();
-  APP_Leg_Init();
   APP_Car_Init();
   APP_Menu_Init();
 

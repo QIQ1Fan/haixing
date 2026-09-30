@@ -120,8 +120,16 @@ void Route_Stop(uint16_t ms);
 /** @brief 刹车急停（绕组短接，最快停住） */
 void Route_Brake(void);
 
-/** @brief 鸣叫 ms 毫秒（用于分段提示、判断程序走到哪一步了） */
+/** @brief 鸣叫 ms 毫秒（阻塞式，用于分段提示、判断程序走到哪一步了） */
 void Route_Beep(uint16_t ms);
+
+/**
+  * @brief  ★ 阶段标记：鸣两声（非阻塞）
+  * @note   路线里"每过一个阶段"报一下，跑的时候凭声音就知道走到第几步了。
+  *         ★ 非阻塞：请求之后立刻返回，两声由后台节拍依次响完 ——
+  *         所以它**不会让车在阶段之间停顿**，下一段立刻就开始。
+  */
+void Route_Beep2(void);
 
 #ifdef __cplusplus
 }
