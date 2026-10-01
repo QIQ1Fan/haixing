@@ -131,6 +131,15 @@ void Route_Beep(uint16_t ms);
   */
 void Route_Beep2(void);
 
+/**
+  * @brief  ★ 左右方向自检：原地左转 1 秒 → 停 → 原地右转 1 秒
+  * @note   串口命令 T 调用。用来一次性确认"左"到底是哪边 ——
+  *         它走的是和路线脚本完全相同的 Route_TurnLeft/Right，
+  *         所以这里看到的方向，就是路线里那三步会走的方向。
+  *         如果标着左转的却往右走，就是 STEERINV 反了。
+  */
+void APP_Route_TestTurn(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -72,6 +72,7 @@ void BSP_Test_ShowMenu(void)
     BSP_UART_SendString("  S. 保存参数到Flash  D. 恢复出厂参数\r\n");
     BSP_UART_SendString("  L. 支撑脚测试       M. 回到 OLED 主界面\r\n");
     BSP_UART_SendString("  E. 串口接收监视     G. 跑路线脚本\r\n");
+    BSP_UART_SendString("  T. 左右方向自检     ?. 重新打印本菜单\r\n");
     BSP_UART_SendString("  ?. 重新打印本菜单\r\n");
     BSP_UART_SendString("============================================\r\n");
     BSP_UART_SendString("请输入 1-9 / 0 / P / H / C / R / V / W / S / D / L / M / E / ? :\r\n");
@@ -105,6 +106,7 @@ static uint8_t test_is_valid_cmd(char cmd)
     case 'M': case 'm':     /* 回到 OLED 主界面 */
     case 'E': case 'e':     /* 串口接收监视 */
     case 'G': case 'g':     /* 跑路线脚本 */
+    case 'T': case 't':     /* 左右方向自检 */
         return 1u;
     default:
         return 0u;          /* 换行、回车、噪声一律静默丢弃 */
@@ -192,6 +194,7 @@ void BSP_Test_RunCommand(char cmd)
     case 'M': case 'm': BSP_Test_MenuShow();       break;
     case 'E': case 'e': BSP_Test_UartMonitor();    break;
     case 'G': case 'g': APP_Route_Run();           break;   /* 跑路线脚本 */
+    case 'T': case 't': APP_Route_TestTurn();      break;   /* 左右方向自检 */
 
     default:
         BSP_Test_ShowMenu();

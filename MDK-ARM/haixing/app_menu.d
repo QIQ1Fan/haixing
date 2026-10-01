@@ -32,6 +32,7 @@ haixing\app_menu.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V
 haixing\app_menu.o: ../Core/Inc/app_param.h
 haixing\app_menu.o: ../Core/Inc/app_car.h
 haixing\app_menu.o: ../Core/Inc/app_leg.h
+haixing\app_menu.o: ../Core/Inc/app_route.h
 haixing\app_menu.o: ../Core/Inc/bsp_key.h
 haixing\app_menu.o: ../Core/Inc/bsp_oled.h
 haixing\app_menu.o: ../Core/Inc/bsp_track.h

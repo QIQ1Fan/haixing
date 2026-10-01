@@ -72,6 +72,7 @@
 #include "app_param.h"
 #include "app_car.h"
 #include "app_leg.h"
+#include "app_route.h"      /* RUN ROUTE 菜单项要调 APP_Route_Run() */
 
 #include "bsp_key.h"
 #include "bsp_oled.h"
@@ -88,6 +89,7 @@
 #define MENU_ROWS           6u      /* 主菜单 / 参数列表一屏能显示几行（page1..6） */
 #define MENU_LIVE_ROWS      4u      /* 行驶中调参页一屏几行（page1..4） */
 #define MENU_LIVE_MAX       6u      /* 行驶中调参最多放几个参数 */
+#define MENU_RT_NUM         6u      /* ROUTE TIME 页的项数（LF1/TN1/LF2/TN2/LF3/TN3）*/
 #define MENU_VAL_X          66u     /* 列表里"值"的列（名字最长 8 字符 = 60 像素）*/
 
 /* 临时提示信息的显示时长（毫秒）。用非阻塞的"到期自动消失"，
@@ -97,8 +99,10 @@
 
 /* 主菜单的动作编号。菜单项 = 名字表 + 这个 switch 分发 */
 typedef enum {
-    MI_TOGGLE_RUN = 0,      /* START CAR / STOP CAR */
+    MI_TOGGLE_RUN = 0,      /* START CAR / STOP CAR（直接循迹，调参时用）*/
+    MI_RUN_ROUTE,           /* ★ RUN ROUTE：执行 app_route.c 里的整条路线脚本 */
     MI_TUNE_PARAM,          /* → UI_PARAM_LIST */
+    MI_ROUTE_TIME,          /* → UI_ROUTE_TIME：调试路线各段时长 */
     MI_LEG,                 /* → UI_LEG */
     MI_SENSOR,              /* → UI_SENSOR */
     MI_SAVE,                /* → APP_Param_Save() */
@@ -113,6 +117,7 @@ typedef enum {
     UI_MENU,                /* 主菜单 */
     UI_PARAM_LIST,          /* 参数列表 */
     UI_PARAM_EDIT,          /* 参数编辑 */
+    UI_ROUTE_TIME,          /* 路线各段时长（调试用） */
     UI_LEG,                 /* 支撑脚 */
     UI_SENSOR,              /* 传感器检查 */
     UI_INFO,                /* 关于 */
@@ -133,13 +138,32 @@ typedef enum {
    ★ 第 0 项在运行时会被替换成 "STOP CAR"，见 menu_draw_menu() */
 static const char *const s_menu_name[MI_NUM] = {
     "START CAR",
+    "RUN ROUTE",
     "TUNE PARAMS",
+    "ROUTE TIME",
     "SUPPORT LEG",
     "SENSOR VIEW",
     "SAVE PARAMS",
     "LOAD DEFAULT",
     "INFO"
 };
+
+/* ==========================================================================
+ * ROUTE TIME 页：一屏调完路线六段时长
+ * --------------------------------------------------------------------------
+ *   为什么单独做一页，而不是只用 TUNE PARAMS：
+ *     · 参数列表有二十多项，六段时长散在里面，调一次要翻半天
+ *     · 这一页把六段按"跑的顺序"排好，一屏看全，改完接着按 K1 就能跑
+ *     · 标题行顺便把总时长算出来 —— 调的时候心里有数
+ *   六个名字就是参数表里的名字，用 APP_Param_FindByName() 查索引，
+ *   所以参数表改名/加项都不会让这一页失效（查不到就跳过那一行）。
+ * ========================================================================== */
+static const char *const s_rt_name[MENU_RT_NUM] = {
+    "LF1_ms", "TN1_ms", "LF2_ms", "TN2_ms", "LF3_ms", "TN3_ms"
+};
+static uint8_t s_rt_idx[MENU_RT_NUM];       /* 参数表里的真实索引 */
+static uint8_t s_rt_cnt = 0u;               /* 实际找到几项 */
+static uint8_t s_rt_sel = 0u;               /* 光标 */
 
 /* 行驶中调参页关心的参数名。按名字查索引，查不到就跳过 ——
    这样以后参数表改名/删参数，这里不会编译报错，最多少显示一行 */
@@ -160,7 +184,9 @@ static uint8_t  s_param_top = 0u;                   /* 参数列表滚动窗口�
 
 static uint8_t  s_edit_idx  = 0u;                   /* 正在编辑的参数索引 */
 static float    s_edit_orig = 0.0f;                 /* 进编辑页时的原值，BACK 用它还原 */
-static uint8_t  s_edit_back_leg = 0u;               /* 1 = 编辑结束后回支撑脚页（从那儿进来的）*/
+/* 编辑结束后回哪一页。0xFF = 回参数列表（默认；从参数列表进来的情况）。
+   支撑脚页 / ROUTE TIME 页进来时会把自己写在这里，于是"编辑完回原处" */
+static uint8_t  s_edit_back_page = 0xFFu;
 
 static uint8_t  s_step_mult = 1u;                   /* 步长倍率：短按 1，长按/连发 5 */
 
@@ -614,6 +640,59 @@ static void menu_draw_param_edit(void)
     BSP_OLED_DrawString(0u, 7u, "K1:OK K2:BK K3+K4-");
 }
 
+
+/* --------------------------------------------------------------------------
+ * UI_ROUTE_TIME —— 路线六段时长一屏调完
+ *   page0    标题 + 总时长
+ *   page1..6 六项：名字 + 数值（毫秒），光标 '>'
+ *   page7    按键提示
+ * -------------------------------------------------------------------------- */
+/** 按名字把六段时长的参数索引查出来（参数表改名也不会让本页失效） */
+static void menu_route_time_build(void)
+{
+    uint8_t i;
+
+    s_rt_cnt = 0u;
+
+    for (i = 0u; i < MENU_RT_NUM; i++) {
+        uint8_t idx = APP_Param_FindByName(s_rt_name[i]);
+
+        if (idx < g_param_count) {
+            s_rt_idx[s_rt_cnt] = idx;
+            s_rt_cnt = (uint8_t)(s_rt_cnt + 1u);
+        }
+    }
+
+    if (s_rt_sel >= s_rt_cnt) {
+        s_rt_sel = 0u;
+    }
+}
+
+static void menu_draw_route_time(void)
+{
+    uint32_t total = 0u;
+    uint8_t  i;
+
+    for (i = 0u; i < s_rt_cnt; i++) {
+        total += (uint32_t)APP_Param_GetByIndex(s_rt_idx[i]);
+    }
+
+    /* 标题行带总时长：调的时候能马上看到"整条路线现在多长" */
+    BSP_OLED_Printf(0u, 0u, "ROUTE TIME %u.%us",
+                    (unsigned int)(total / 1000u),
+                    (unsigned int)((total % 1000u) / 100u));
+
+    for (i = 0u; i < s_rt_cnt; i++) {
+        const APP_ParamItem_t *it = &g_param_table[s_rt_idx[i]];
+
+        BSP_OLED_Printf(0u, (uint8_t)(1u + i), "%c %-6s %5u",
+                        (i == s_rt_sel) ? '>' : ' ',
+                        it->name,
+                        (unsigned int)APP_Param_GetByIndex(s_rt_idx[i]));
+    }
+
+    BSP_OLED_DrawString(0u, 7u, "K1:EDIT K2:BK K3+K4-");
+}
 /* --------------------------------------------------------------------------
  * UI_LEG —— 支撑脚手动控制
  * -------------------------------------------------------------------------- */
@@ -796,6 +875,7 @@ static void menu_draw(void)
     case (uint8_t)UI_MENU:       menu_draw_menu();       break;
     case (uint8_t)UI_PARAM_LIST: menu_draw_param_list(); break;
     case (uint8_t)UI_PARAM_EDIT: menu_draw_param_edit(); break;
+    case (uint8_t)UI_ROUTE_TIME: menu_draw_route_time(); break;
     case (uint8_t)UI_LEG:        menu_draw_leg();        break;
     case (uint8_t)UI_SENSOR:     menu_draw_sensor();     break;
     case (uint8_t)UI_INFO:       menu_draw_info();       break;
@@ -893,10 +973,41 @@ static uint8_t menu_key_menu(uint8_t key, uint8_t evt)
         s_page = (uint8_t)UI_STATUS;
         break;
 
+    case MI_RUN_ROUTE:
+        /* ★★ 从菜单里再跑一次路线 ★★
+         *
+         *   之前"跑路线"只在上电时问一次（APP_Route_Enter），
+         *   一旦选了 K2 进菜单就再也回不去了 —— 调完 ROUTE TIME
+         *   想再跑一遍只能断电重启。这个菜单项就是补这个口子。
+         *
+         *   注意 APP_Route_Run() 是阻塞式的：它会一直跑到整条路线结束
+         *   （或者被长按 K2 中止）才返回。期间屏幕和按键都由路线模块独占，
+         *   所以调用者不用做任何配合 —— 返回之后把画面重画一次即可。
+         *
+         *   进去之前先确定车是停着的：APP_Route_Run() 内部第一件事就是
+         *   停车，所以即使刚从 START CAR 跑着也能安全切过来。 */
+        APP_Route_Run();
+
+        /* 路线跑完 → 回到菜单，并把画面整屏重画一次
+           （路线期间屏幕被它自己用过，菜单的显存对比已经不可信） */
+        BSP_OLED_Clear();
+        BSP_OLED_MarkAllDirty();
+        s_force_draw = 1u;
+        s_page       = (uint8_t)UI_MENU;
+        menu_set_msg("ROUTE DONE", MENU_MSG_MS);
+        break;
+
     case MI_TUNE_PARAM:
         s_page      = (uint8_t)UI_PARAM_LIST;
         s_param_sel = 0u;
         s_param_top = 0u;
+        break;
+
+    case MI_ROUTE_TIME:
+        /* 进页面时按名字把六个参数的索引查出来（查一次，页面里反复用） */
+        menu_route_time_build();
+        s_rt_sel = 0u;
+        s_page   = (uint8_t)UI_ROUTE_TIME;
         break;
 
     case MI_LEG:
@@ -977,8 +1088,8 @@ static uint8_t menu_key_param_list(uint8_t key, uint8_t evt)
         s_edit_idx      = s_param_sel;
         s_edit_orig     = APP_Param_GetByIndex(s_edit_idx);
         s_step_mult     = 1u;
-        s_edit_back_leg = 0u;               /* 从参数列表进来的，回去也回列表 */
-        s_page          = (uint8_t)UI_PARAM_EDIT;
+        s_edit_back_page = 0xFFu;           /* 从参数列表进来的，回去也回列表 */
+        s_page           = (uint8_t)UI_PARAM_EDIT;
         return 1u;
     }
 
@@ -1013,9 +1124,9 @@ static uint8_t menu_key_param_edit(uint8_t key, uint8_t evt)
     if (key == (uint8_t)MKEY_OK) {
         /* 完成，保留改动。★ 回哪一页取决于从哪儿进来的：
            从参数列表进来就回列表，从支撑脚页进来就回支撑脚页 */
-        s_page          = (s_edit_back_leg != 0u) ? (uint8_t)UI_LEG
-                                                 : (uint8_t)UI_PARAM_LIST;
-        s_edit_back_leg = 0u;
+        s_page = (s_edit_back_page != 0xFFu) ? s_edit_back_page
+                                             : (uint8_t)UI_PARAM_LIST;
+        s_edit_back_page = 0xFFu;
         return 1u;
     }
 
@@ -1024,15 +1135,58 @@ static uint8_t menu_key_param_edit(uint8_t key, uint8_t evt)
            这样"按错了键"是有救的，用户敢放心大胆地试 */
         APP_Param_SetByIndex(s_edit_idx, s_edit_orig);
         menu_sync_leg(s_edit_idx);
-        s_page          = (s_edit_back_leg != 0u) ? (uint8_t)UI_LEG
-                                                 : (uint8_t)UI_PARAM_LIST;
-        s_edit_back_leg = 0u;
+        s_page = (s_edit_back_page != 0xFFu) ? s_edit_back_page
+                                             : (uint8_t)UI_PARAM_LIST;
+        s_edit_back_page = 0xFFu;
         return 1u;
     }
 
     return 0u;
 }
 
+
+/* --------------------------------------------------------------------------
+ * ROUTE TIME 页的按键
+ *   K3/K4 移光标，K1 进编辑（复用参数编辑页），K2 返回主菜单
+ * -------------------------------------------------------------------------- */
+static uint8_t menu_key_route_time(uint8_t key, uint8_t evt)
+{
+    (void)evt;
+
+    if ((key == (uint8_t)MKEY_PLUS) || (key == (uint8_t)MKEY_MINUS)) {
+        if (s_rt_cnt == 0u) {
+            return 0u;
+        }
+        if (key == (uint8_t)MKEY_PLUS) {
+            s_rt_sel = (uint8_t)((s_rt_sel + s_rt_cnt - 1u) % s_rt_cnt);
+        } else {
+            s_rt_sel = (uint8_t)((s_rt_sel + 1u) % s_rt_cnt);
+        }
+        return 1u;
+    }
+
+    if (key == (uint8_t)MKEY_BACK) {
+        s_page = (uint8_t)UI_MENU;
+        return 1u;
+    }
+
+    if (key == (uint8_t)MKEY_OK) {
+        if (s_rt_sel >= s_rt_cnt) {
+            return 0u;
+        }
+        /* 和支撑脚页一样：直接跳进现成的参数编辑页，编辑完回到本页。
+           复用编辑页意味着步长、上下限、长按加速全都现成，
+           而且"改完立刻生效"这条行为也一致 */
+        s_edit_idx       = s_rt_idx[s_rt_sel];
+        s_edit_orig      = APP_Param_GetByIndex(s_edit_idx);
+        s_step_mult      = 1u;
+        s_edit_back_page = (uint8_t)UI_ROUTE_TIME;
+        s_page           = (uint8_t)UI_PARAM_EDIT;
+        return 1u;
+    }
+
+    return 0u;
+}
 /* --------------------------------------------------------------------------
  * 支撑脚
  * -------------------------------------------------------------------------- */
@@ -1072,12 +1226,12 @@ static uint8_t menu_key_leg(uint8_t key, uint8_t evt)
                  · 步长、上下限、长按加速全都已经写好了，不用重复一遍
                  · 编辑时支撑脚会实时跟着动（menu_sync_leg 的联动）
                  · 少一套按键处理，就少一个"两处行为不一致"的坑
-               s_edit_back_leg 让编辑结束后回到本页，而不是参数列表 */
+               s_edit_back_page 让编辑结束后回到本页，而不是参数列表 */
             s_edit_idx      = idx;
             s_edit_orig     = APP_Param_GetByIndex(idx);
             s_step_mult     = 1u;
-            s_edit_back_leg = 1u;
-            s_page          = (uint8_t)UI_PARAM_EDIT;
+            s_edit_back_page = (uint8_t)UI_LEG;
+            s_page           = (uint8_t)UI_PARAM_EDIT;
         }
         return 1u;
     }
@@ -1178,6 +1332,9 @@ static uint8_t menu_dispatch(uint8_t key, uint8_t evt)
      *     2) 保存这个动作只能在停车时做（要擦 Flash，约 30ms 全程阻塞），
      *        集中在一处判断，就不可能出现"某个页面忘了拦"的漏网之鱼
      *
+
+
+     *
      *   ★ 短按 K2 不受影响，仍然是各页自己的"返回上一级"。
      * ====================================================================== */
     if ((key == (uint8_t)MKEY_BACK) && (evt == (uint8_t)KEY_EVENT_LONG)) {
@@ -1203,6 +1360,7 @@ static uint8_t menu_dispatch(uint8_t key, uint8_t evt)
     case (uint8_t)UI_MENU:       return menu_key_menu(key, evt);
     case (uint8_t)UI_PARAM_LIST: return menu_key_param_list(key, evt);
     case (uint8_t)UI_PARAM_EDIT: return menu_key_param_edit(key, evt);
+    case (uint8_t)UI_ROUTE_TIME: return menu_key_route_time(key, evt);
     case (uint8_t)UI_LEG:        return menu_key_leg(key, evt);
     case (uint8_t)UI_SENSOR:     return menu_key_sensor(key, evt);
     case (uint8_t)UI_INFO:       return menu_key_info(key, evt);

@@ -357,6 +357,42 @@ void Route_Beep2(void)
     BSP_Buzzer_BeepAsync(ROUTE_BEEP2_ON_MS);
 }
 
+/**
+  * @brief  ★ 左右方向自检：原地左转 1 秒 → 停 1 秒 → 原地右转 1 秒
+  * @note   用途是"一次性把左右看清楚"，不用再靠推理。
+  *         跑法：把车架空（或放在空旷地面上），串口敲 T。
+  *         看两个动作分别把车头转向哪边，就能确定：
+  *           · 标着"左转"的那个动作真的往左  → 方向全对
+  *           · 标着"左转"的却往右            → STEERINV 反了，
+  *             去菜单 TUNE PARAMS 把 STEERINV 拨一下
+  *         ★ 注意：它走的是和路线脚本完全相同的 Route_TurnLeft/Right，
+  *           所以这里看到的方向，就是路线里那三步会走的方向。
+  */
+void APP_Route_TestTurn(void)
+{
+    s_active    = 1u;
+    s_abort     = 0u;                   /* 清掉上一次跑路线留下的中止标志 */
+    s_step_no   = 0u;
+    s_pump_tick = HAL_GetTick();
+    s_draw_tick = HAL_GetTick();
+    s_beep2_stage = 0u;
+
+    APP_Car_Stop();
+    BSP_Motor_Stop();
+
+    BSP_UART_SendString("\r\n[turn] LEFT 1s -> stop -> RIGHT 1s. watch the car.\r\n");
+    Route_Beep(150u);
+
+    Route_TurnLeft(1000u);
+    Route_Stop(800u);
+    Route_TurnRight(1000u);
+    Route_Stop(400u);
+
+    s_active = 0u;
+    BSP_UART_SendString("[turn] done. if LEFT went right, flip STEERINV\r\n");
+    BSP_OLED_ClearAndRefresh();
+}
+
 /* ==========================================================================
  * 入口
  * ========================================================================== */
@@ -385,25 +421,19 @@ void APP_Route_Abort(void)
  *        再按比例改毫秒数（比如 600ms 转了 70°，那 90° 就写 770ms）
  *     4) 每段之间可以插 Route_Beep()，跑的时候听声音就知道走到哪一步了
  * --------------------------------------------------------------------------
- *   标定前的示例路线（照着改就行）：
+ *   当前路线（时长值都在菜单 ROUTE TIME 里调）：
  * ========================================================================== */
 /* --------------------------------------------------------------------------
- * ★★ 需要你标定的量 ★★
- * --------------------------------------------------------------------------
- *   原地转弯转多少度，只能靠"时间"来控制（没有陀螺仪），所以这三个数
- *   必须实车标定。步骤：
- *     1) 先随便写一个值（比如 900），把每一步都标上
- *     2) 跑一次路线，量一下每次实际转了多少度
- *        （最省事的办法：出发前在地上画一条与车身对齐的线，转完看车头偏了多少）
- *     3) 按比例换算：需要 90°、实测 900ms 转了 70° → 900×90/70 ≈ 1160
- *     4) 改下面的数字、重编、再跑，一般两三次就能准
- *
- *   三个转角可以分别标 —— 地面摩擦、电池电压每次都不太一样，
- *   同一个时间在不同弯道转出来的角度可能差几度，分开标最省心。
+ * 路线各段的时长已经改成【参数】了，不再写死在这里。
+ * 改时长有两个入口，都不用重新编译：
+ *   · 菜单 → ROUTE TIME      （一屏看全六段，专为调试路线用）
+ *   · 菜单 → TUNE PARAMS     （LF1_ms / TN1_ms / ... 同名参数）
+ * 参数名与步骤的对应：
+ *   LF1_ms = step1 循线    TN1_ms = step2 转弯
+ *   LF2_ms = step3 循线    TN2_ms = step4 转弯
+ *   LF3_ms = step5 循线    TN3_ms = step6 转弯
+ * 转弯时长仍需实车标定：跑一次量出实际转了多少度，按比例改。
  * -------------------------------------------------------------------------- */
-#define T_RIGHT_1_MS    900u    /* step2 右转的持续时间（毫秒）★ 待标定 */
-#define T_RIGHT_2_MS    900u    /* step4 右转的持续时间（毫秒）★ 待标定 */
-#define T_RIGHT_3_MS    900u    /* step6 右转的持续时间（毫秒）★ 待标定 */
 
 void APP_Route_Run(void)
 {
@@ -421,22 +451,22 @@ void APP_Route_Run(void)
 
     /* ======================= ↓↓↓ 路线从这里开始 ↓↓↓ ======================= */
 
-    Route_LineFollow(10500u);           /* step1：循线 10.5 秒 */
+    Route_LineFollow(g_param.rt_lf1_ms);    /* step1：循线（时长见菜单 ROUTE TIME）*/
     Route_Beep2();                      /*        阶段标记：鸣两声 */
 
-    Route_TurnRight(T_RIGHT_1_MS);      /* step2：右转 */
+    Route_TurnLeft(g_param.rt_tn1_ms);      /* step2：左转 */
     Route_Beep2();
 
-    Route_LineFollow(16000u);           /* step3：循线 16 秒 */
+    Route_LineFollow(g_param.rt_lf2_ms);    /* step3：循线 */
     Route_Beep2();
 
-    Route_TurnRight(T_RIGHT_2_MS);      /* step4：右转 */
+    Route_TurnLeft(g_param.rt_tn2_ms);      /* step4：左转 */
     Route_Beep2();
 
-    Route_LineFollow(15000u);           /* step5：循线 15 秒 */
+    Route_LineFollow(g_param.rt_lf3_ms);    /* step5：循线 */
     Route_Beep2();
 
-    Route_TurnRight(T_RIGHT_3_MS);      /* step6：右转 */
+    Route_TurnLeft(g_param.rt_tn3_ms);      /* step6：左转 */
     Route_Beep2();
 
     /* 路线结束 */

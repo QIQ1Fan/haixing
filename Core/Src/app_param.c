@@ -94,27 +94,43 @@ APP_Param_t g_param;
  *   给 250 等于把最有力的那部分转向能力锁掉，大车会转不过来。 */
 #define DEF_INNER_MIN_SPD   0
 #define DEF_RAMP_MS         400         /* 0 → 全速用 0.4 秒，起步不打滑 */
-/* ★★★ 转向差速取反：默认 1（实车实测）★★★
+/* ★★★ 转向差速取反：默认 0 ★★★
  *
  * 【它管什么】
  *   把"转向差速的方向"整个对调：本该左轮慢右轮快的场合，变成左轮快右轮慢。
- *   用途是纠正两类装配问题：
- *     · 两个电机在 TB6612 上的左右接反了（代码里的"左"其实是车的右侧）
+ *   用来纠正两类"装配上左右颠倒"的问题：
+ *     · 两个电机在 TB6612 上的左右接反了（代码里的"左"其实装在车右侧）
  *     · 探头阵列装反了（索引 0 其实在车的右边）
- *   这两种情况都会让"误差为负 → 该左转"变成"车往右拐"，现象就是
- *   "车明明偏了却朝远离线的方向走"。本车实测就是这一类问题。
  *
  * 【它和 MLINV / MRINV 的区别（千万别混）】
  *   MLINV/MRINV 管【单个电机转的方向】：错了的表现是"两个轮子都被命令前进，
  *     车却原地打转"，或者"两个轮子都往后走"。
  *   STEERINV    管【左右两边的分配】：错了的表现是"车能往前开、也能走直线，
  *     但纠偏时总是朝反方向拐"。
- *   前者错了车走不了直线，后者错了车走得了直线但循不了线 —— 症状完全不同。
+ *
+ * 【★★ 为什么这次要从 1 改回 0 —— 这两个开关是耦合的 ★★】
+ *   把所有轮子的极性同时翻一次，"前后方向"会翻，**"偏航方向"也一起翻**。
+ *   本车的实际过程正好走了一遍：
+ *
+ *     ① 最开始：MLINV=0, MRINV=1 → 两个轮子都被命令前进、却都在往后转
+ *        （轮子整体反了一次），于是偏航也跟着反了一次
+ *        ⇒ 那时 STEERINV 必须 = 1 才能把转向掰正
+ *
+ *     ② 换电机之后：改成了 MLINV=1, MRINV=0 → 前进方向对了，
+ *        同时偏航也翻回了正确方向
+ *        ⇒ 此时 STEERINV 必须 = 0；还留 1 就等于又反了一次，
+ *           现象是"车一进循迹模式就朝远离线的方向拐，
+ *           冲出线后丢线保护让它原地打转，看起来像走不起来"
+ *
+ * 【★ 心法：先修前进，再修转向，改一个必须复核另一个】
+ *   1) 先用测试 4 把 MLINV / MRINV 调对（两轮都朝车头转）
+ *   2) 再上线验证 STEERINV：让线偏在车的左边，车应该朝【左】拐
+ *   3) 只要动了第 1 步，第 2 步的结论就作废，必须重新验一遍
  *
  * 【改错了会怎样】
- *   本来是对的、却把它设成 1 → 车会朝远离线的方向冲出去（很快就看得出来）。
- *   所以在菜单里拨一下就能试，不用重编重烧。 */
-#define DEF_STEER_INV       1
+ *   本来是对的、却把它设成 1 → 车会朝远离线的方向冲出去（几秒钟就看出来）。
+ *   菜单里拨一下就能试，不用重编重烧。 */
+#define DEF_STEER_INV       0
 /* ★ 电机转向取反的出厂默认值直接取自 bsp_config.h 的宏。
    这样"改宏重编"和"在菜单里拨"共用同一个初始值，两套用法不会打架 */
 #define DEF_MOTOR_L_INV     MOTOR_L_INVERT
@@ -125,7 +141,7 @@ APP_Param_t g_param;
  *   调试阶段（车还跟不上线）这是唯一好用的设置：
  *   否则"走 0.8 秒就刹车"会让人不停按 START，根本看不出控制效果。
  *   循迹整定好之后，想让它冲出赛道时自动停，改成 800~1500 即可。 */
-#define DEF_LOST_STOP_MS    0
+#define DEF_LOST_STOP_MS    6000
 #define DEF_CROSS_HOLD_MS   260         /* 十字路口保持直行 0.26 秒通过 */
 
 /* ★ 默认 0 = 关闭堵转保护。
@@ -139,6 +155,16 @@ APP_Param_t g_param;
  *   这两个值必须实车标定：
  *     · 如果某一端听到舵机"嗡嗡"顶死不走，把那一端往回收 5~10 度
  *     · 菜单 TUNE PARAMS 里改 LEGUP / LEGDN 能立刻看到脚动，调完按 S 存 Flash */
+/* ★★ 路线各阶段的默认时长（毫秒）★★
+ *   就是"发车前写在脚本里"的那一份，现在菜单里随时能改，改完立刻生效 ——
+ *   下一次按 K1 跑路线就用新值 */
+#define DEF_RT_LF1_MS       10500       /* step1 循线 10.5s */
+#define DEF_RT_TN1_MS       900         /* step2 左转 ★ 待标定 */
+#define DEF_RT_LF2_MS       17000       /* step3 循线 17s */
+#define DEF_RT_TN2_MS       900         /* step4 左转 ★ 待标定 */
+#define DEF_RT_LF3_MS       15000       /* step5 循线 15s */
+#define DEF_RT_TN3_MS       900         /* step6 左转 ★ 待标定 */
+
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
 
@@ -181,11 +207,20 @@ const APP_ParamItem_t g_param_table[] = {
     { "RAMPms",   offsetof(APP_Param_t, ramp_ms),      PTYPE_U16,  0,  50.0f,    0.0f,  3000.0f },
     /* ------------------------------- 丢线 ------------------------------- */
     { "LOSTTRN",  offsetof(APP_Param_t, lost_turn),    PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
-    { "LOSTms",   offsetof(APP_Param_t, lost_stop_ms), PTYPE_U16,  0,  50.0f,    0.0f,  5000.0f },
+    { "LOSTms",   offsetof(APP_Param_t, lost_stop_ms), PTYPE_U16,  0, 100.0f,    0.0f, 15000.0f },
     /* ------------------------------- 十字 ------------------------------- */
     { "CROSSms",  offsetof(APP_Param_t, cross_hold_ms),PTYPE_U16,  0,  50.0f,    0.0f,  2000.0f },
     /* ------------------------------- 保护 ------------------------------- */
     { "STALLms",  offsetof(APP_Param_t, stall_ms),     PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
+    /* ------------------------ 路线各阶段时长 ---------------------------- */
+    /* 循线段步长 100ms（一段十几秒，长按 = 500/次）
+       转弯段步长  50ms（一段不到 1 秒，50ms 大约对应 5 度，标定时要细） */
+    { "LF1_ms",   offsetof(APP_Param_t, rt_lf1_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
+    { "TN1_ms",   offsetof(APP_Param_t, rt_tn1_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "LF2_ms",   offsetof(APP_Param_t, rt_lf2_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
+    { "TN2_ms",   offsetof(APP_Param_t, rt_tn2_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "LF3_ms",   offsetof(APP_Param_t, rt_lf3_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
+    { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
@@ -288,6 +323,13 @@ static void param_fill_default(APP_Param_t *p)
     p->cross_hold_ms = (uint16_t)DEF_CROSS_HOLD_MS;
 
     p->stall_ms = (uint16_t)DEF_STALL_MS;
+
+    p->rt_lf1_ms = (uint16_t)DEF_RT_LF1_MS;
+    p->rt_tn1_ms = (uint16_t)DEF_RT_TN1_MS;
+    p->rt_lf2_ms = (uint16_t)DEF_RT_LF2_MS;
+    p->rt_tn2_ms = (uint16_t)DEF_RT_TN2_MS;
+    p->rt_lf3_ms = (uint16_t)DEF_RT_LF3_MS;
+    p->rt_tn3_ms = (uint16_t)DEF_RT_TN3_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
     p->leg_down_deg = (uint8_t)DEF_LEG_DOWN_DEG;
