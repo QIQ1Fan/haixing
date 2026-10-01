@@ -89,7 +89,7 @@
 #define MENU_ROWS           6u      /* 主菜单 / 参数列表一屏能显示几行（page1..6） */
 #define MENU_LIVE_ROWS      4u      /* 行驶中调参页一屏几行（page1..4） */
 #define MENU_LIVE_MAX       6u      /* 行驶中调参最多放几个参数 */
-#define MENU_RT_NUM         6u      /* ROUTE TIME 页的项数（LF1/TN1/LF2/TN2/LF3/TN3）*/
+#define MENU_RT_NUM         8u      /* ROUTE TIME 页最多放几项（为以后加步骤留余量）*/
 #define MENU_VAL_X          66u     /* 列表里"值"的列（名字最长 8 字符 = 60 像素）*/
 
 /* 临时提示信息的显示时长（毫秒）。用非阻塞的"到期自动消失"，
@@ -159,11 +159,13 @@ static const char *const s_menu_name[MI_NUM] = {
  *   所以参数表改名/加项都不会让这一页失效（查不到就跳过那一行）。
  * ========================================================================== */
 static const char *const s_rt_name[MENU_RT_NUM] = {
-    "LF1_ms", "TN1_ms", "LF2_ms", "TN2_ms", "LF3_ms", "TN3_ms"
+    "LF1_ms", "TN1_ms", "LF2_ms", "TN2_ms", "LF3_ms", "TN3_ms", "LF4_ms"
 };
 static uint8_t s_rt_idx[MENU_RT_NUM];       /* 参数表里的真实索引 */
 static uint8_t s_rt_cnt = 0u;               /* 实际找到几项 */
-static uint8_t s_rt_sel = 0u;               /* 光标 */
+static uint8_t s_rt_sel = 0u;               /* 光标（可见表里的位置）*/
+static uint8_t s_rt_top = 0u;               /* 滚动窗口的首项 */
+#define MENU_RT_ROWS    MENU_ROWS           /* 一屏显示几行（复用主菜单的行数 = 6）*/
 
 /* 行驶中调参页关心的参数名。按名字查索引，查不到就跳过 ——
    这样以后参数表改名/删参数，这里不会编译报错，最多少显示一行 */
@@ -397,8 +399,12 @@ static void menu_param_fix_top(void)
     if ((uint16_t)s_param_sel >= ((uint16_t)s_param_top + MENU_ROWS)) {
         s_param_top = (uint8_t)(s_param_sel - (MENU_ROWS - 1u));
     }
-    if (((uint16_t)s_param_top + MENU_ROWS) > (uint16_t)g_param_count) {
-        s_param_top = (g_param_count > MENU_ROWS) ? (uint8_t)(g_param_count - MENU_ROWS) : 0u;
+    /* ★ 用 g_param_vis_count 而不是 g_param_count：
+       参数表尾部那些"隐藏项"（路线各段时长等）不进这个列表，
+       它们只在 ROUTE TIME 之类的专用页面里出现 */
+    if (((uint16_t)s_param_top + MENU_ROWS) > (uint16_t)g_param_vis_count) {
+        s_param_top = (g_param_vis_count > MENU_ROWS)
+                      ? (uint8_t)(g_param_vis_count - MENU_ROWS) : 0u;
     }
 }
 
@@ -577,7 +583,7 @@ static void menu_draw_param_list(void)
 
     BSP_OLED_Printf(0u, 0u, "PARAMS %u/%u %s",
                     (unsigned int)(s_param_sel + 1u),
-                    (unsigned int)g_param_count,
+                    (unsigned int)g_param_vis_count,     /* 只算可见项 */
                     (APP_Param_IsDirty() != 0u) ? "*" : " ");
 
     for (i = 0u; i < MENU_ROWS; i++) {
@@ -585,8 +591,8 @@ static void menu_draw_param_list(void)
         const APP_ParamItem_t *it;
         uint8_t page;
 
-        if (idx >= g_param_count) {
-            break;
+        if (idx >= g_param_vis_count) {
+            break;                          /* 隐藏项不进这个列表 */
         }
 
         it   = &g_param_table[idx];
@@ -666,6 +672,22 @@ static void menu_route_time_build(void)
     if (s_rt_sel >= s_rt_cnt) {
         s_rt_sel = 0u;
     }
+    s_rt_top = 0u;
+}
+
+/** 让光标始终落在可见窗口里（项数超过一屏时才起作用） */
+static void menu_rt_fix_top(void)
+{
+    if (s_rt_sel < s_rt_top) {
+        s_rt_top = s_rt_sel;
+    }
+    if ((uint16_t)s_rt_sel >= ((uint16_t)s_rt_top + MENU_RT_ROWS)) {
+        s_rt_top = (uint8_t)(s_rt_sel - (MENU_RT_ROWS - 1u));
+    }
+    if (((uint16_t)s_rt_top + MENU_RT_ROWS) > (uint16_t)s_rt_cnt) {
+        s_rt_top = (s_rt_cnt > MENU_RT_ROWS)
+                   ? (uint8_t)(s_rt_cnt - MENU_RT_ROWS) : 0u;
+    }
 }
 
 static void menu_draw_route_time(void)
@@ -678,17 +700,29 @@ static void menu_draw_route_time(void)
     }
 
     /* 标题行带总时长：调的时候能马上看到"整条路线现在多长" */
-    BSP_OLED_Printf(0u, 0u, "ROUTE TIME %u.%us",
+    /* 标题行：总时长 + 当前光标位置。总时长是"各段相加"，
+       调的时候能马上看到整条路线现在有多长 */
+    BSP_OLED_Printf(0u, 0u, "ROUTE %u/%u %u.%us",
+                    (unsigned int)((s_rt_cnt == 0u) ? 0u : (s_rt_sel + 1u)),
+                    (unsigned int)s_rt_cnt,
                     (unsigned int)(total / 1000u),
                     (unsigned int)((total % 1000u) / 100u));
 
-    for (i = 0u; i < s_rt_cnt; i++) {
-        const APP_ParamItem_t *it = &g_param_table[s_rt_idx[i]];
+    /* 滚动窗口：项数一屏放得下就直接全画，放不下就跟着光标滚 */
+    for (i = 0u; i < MENU_RT_ROWS; i++) {
+        uint8_t k = (uint8_t)(s_rt_top + i);
+        const APP_ParamItem_t *it;
+
+        if (k >= s_rt_cnt) {
+            break;
+        }
+
+        it = &g_param_table[s_rt_idx[k]];
 
         BSP_OLED_Printf(0u, (uint8_t)(1u + i), "%c %-6s %5u",
-                        (i == s_rt_sel) ? '>' : ' ',
+                        (k == s_rt_sel) ? '>' : ' ',
                         it->name,
-                        (unsigned int)APP_Param_GetByIndex(s_rt_idx[i]));
+                        (unsigned int)APP_Param_GetByIndex(s_rt_idx[k]));
     }
 
     BSP_OLED_DrawString(0u, 7u, "K1:EDIT K2:BK K3+K4-");
@@ -1066,13 +1100,16 @@ static uint8_t menu_key_param_list(uint8_t key, uint8_t evt)
     (void)evt;
 
     if ((key == (uint8_t)MKEY_PLUS) || (key == (uint8_t)MKEY_MINUS)) {
-        if (g_param_count == 0u) {
+        if (g_param_vis_count == 0u) {
             return 0u;
         }
+        /* 光标只在"可见项"里转圈，隐藏项翻不到（也就不会出现
+           光标停在一项却在屏幕上看不见的情况） */
         if (key == (uint8_t)MKEY_PLUS) {
-            s_param_sel = (uint8_t)((s_param_sel + g_param_count - 1u) % g_param_count);
+            s_param_sel = (uint8_t)((s_param_sel + g_param_vis_count - 1u)
+                                    % g_param_vis_count);
         } else {
-            s_param_sel = (uint8_t)((s_param_sel + 1u) % g_param_count);
+            s_param_sel = (uint8_t)((s_param_sel + 1u) % g_param_vis_count);
         }
         menu_param_fix_top();
         return 1u;
@@ -1162,6 +1199,7 @@ static uint8_t menu_key_route_time(uint8_t key, uint8_t evt)
         } else {
             s_rt_sel = (uint8_t)((s_rt_sel + 1u) % s_rt_cnt);
         }
+        menu_rt_fix_top();
         return 1u;
     }
 

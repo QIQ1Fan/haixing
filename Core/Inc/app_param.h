@@ -92,6 +92,7 @@ typedef struct {
     uint16_t rt_tn2_ms;     /* step4 转弯时长（★ 需实车标定） */
     uint16_t rt_lf3_ms;     /* step5 循线时长 */
     uint16_t rt_tn3_ms;     /* step6 转弯时长（★ 需实车标定） */
+    uint16_t rt_lf4_ms;     /* step7 循线时长（上台阶那一段，同时做舵机摆动）*/
 
     /* -------------------------- 支撑脚 ---------------------------- */
     uint8_t  leg_up_deg;    /* 收起（行驶位）角度，★ 必须实车标定 */
@@ -122,11 +123,27 @@ typedef struct {
     float           step;       /* 按一下 +/- 变化多少 */
     float           vmin;       /* 下限（含） */
     float           vmax;       /* 上限（含） */
+    /* ★ 1 = 不在 TUNE PARAMS 列表里显示，只在专用页面里出现。
+     *   目前只有"路线各段时长"用它 —— 那几项属于"改路线时才关心"，
+     *   放在 TUNE PARAMS 里会把列表撑得很长（而且以后还要加步骤）。
+     *   它们仍然参与限幅、校验和、Flash 保存、串口打印，只是不占列表位置。
+     *   ★ 约定：可见项必须排在参数表的前面，隐藏项排在最后 ——
+     *     这样参数列表只要遍历前 g_param_vis_count 项即可，导航逻辑不用改。
+     *   写表时可以省略这一项（省略即为 0 = 可见） */
+    uint8_t         hidden;
 } APP_ParamItem_t;
 
 /** 参数表与参数个数。菜单直接遍历它们 */
 extern const APP_ParamItem_t g_param_table[];
 extern const uint8_t         g_param_count;
+
+/**
+  * @brief  "可见参数"的个数 —— 也就是 TUNE PARAMS 列表里能翻到几项
+  * @note   参数表前面的 g_param_vis_count 项是可见的（hidden = 0），
+  *         后面的是隐藏项（路线时长之类，只在专用页面出现）。
+  *         上电时由 APP_Param_Init() 数出来。
+  */
+extern uint8_t               g_param_vis_count;
 
 /** 全局参数实例。所有模块都读它 */
 extern APP_Param_t g_param;

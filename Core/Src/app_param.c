@@ -164,6 +164,9 @@ APP_Param_t g_param;
 #define DEF_RT_TN2_MS       900         /* step4 左转 ★ 待标定 */
 #define DEF_RT_LF3_MS       15000       /* step5 循线 15s */
 #define DEF_RT_TN3_MS       900         /* step6 左转 ★ 待标定 */
+/* step7：上台阶那一段的循线时长。这 5 秒里车一边循线，
+   支撑脚一边按 Route_ServoAt() 排好的时间点摆动（见 app_route.c） */
+#define DEF_RT_LF4_MS       5000        /* step7 循线 5s（同时做舵机摆动）*/
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
@@ -212,24 +215,36 @@ const APP_ParamItem_t g_param_table[] = {
     { "CROSSms",  offsetof(APP_Param_t, cross_hold_ms),PTYPE_U16,  0,  50.0f,    0.0f,  2000.0f },
     /* ------------------------------- 保护 ------------------------------- */
     { "STALLms",  offsetof(APP_Param_t, stall_ms),     PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
-    /* ------------------------ 路线各阶段时长 ---------------------------- */
-    /* 循线段步长 100ms（一段十几秒，长按 = 500/次）
-       转弯段步长  50ms（一段不到 1 秒，50ms 大约对应 5 度，标定时要细） */
-    { "LF1_ms",   offsetof(APP_Param_t, rt_lf1_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
-    { "TN1_ms",   offsetof(APP_Param_t, rt_tn1_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
-    { "LF2_ms",   offsetof(APP_Param_t, rt_lf2_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
-    { "TN2_ms",   offsetof(APP_Param_t, rt_tn2_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
-    { "LF3_ms",   offsetof(APP_Param_t, rt_lf3_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
-    { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
        1 度正好；要快速大范围挪动就长按（长按/连发 = 5 倍步长 = 5 度/次） */
     { "LEGUP",    offsetof(APP_Param_t, leg_up_deg),   PTYPE_U8,   0,   1.0f,    0.0f,   180.0f },
     { "LEGDN",    offsetof(APP_Param_t, leg_down_deg), PTYPE_U8,   0,   1.0f,    0.0f,   180.0f },
+
+    /* ===================== 以下是隐藏项（不进 TUNE PARAMS）=====================
+     * ★ 必须放在表的最后 —— 参数列表只遍历前 g_param_vis_count 项，
+     *   这个数就是"从头开始连续的 hidden = 0 的项数"，见 APP_Param_Init()。
+     *
+     * 路线各段时长：只在菜单的 ROUTE TIME 页里出现。
+     * 放进 TUNE PARAMS 会把列表撑得很长（而且以后还会加步骤），所以隐藏起来。
+     * 循线段步长 100ms（一段十几秒，长按 = 500/次）
+     * 转弯段步长  50ms（一段不到 1 秒，50ms 大约对应 5 度，标定时要细）
+     * ======================================================================= */
+    { "LF1_ms",   offsetof(APP_Param_t, rt_lf1_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f, 1u },
+    { "TN1_ms",   offsetof(APP_Param_t, rt_tn1_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f, 1u },
+    { "LF2_ms",   offsetof(APP_Param_t, rt_lf2_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f, 1u },
+    { "TN2_ms",   offsetof(APP_Param_t, rt_tn2_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f, 1u },
+    { "LF3_ms",   offsetof(APP_Param_t, rt_lf3_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f, 1u },
+    { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f, 1u },
+    { "LF4_ms",   offsetof(APP_Param_t, rt_lf4_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f, 1u },
 };
 
 const uint8_t g_param_count = (uint8_t)(sizeof(g_param_table) / sizeof(g_param_table[0]));
+
+/* "可见参数"个数（TUNE PARAMS 能翻到几项）。上电时由 APP_Param_Init() 数出来，
+   见头文件里对 g_param_vis_count 的说明 */
+uint8_t g_param_vis_count = 0u;
 
 /* 脏标记：参数被改过但还没保存回 Flash */
 static uint8_t s_dirty = 0u;
@@ -330,6 +345,7 @@ static void param_fill_default(APP_Param_t *p)
     p->rt_tn2_ms = (uint16_t)DEF_RT_TN2_MS;
     p->rt_lf3_ms = (uint16_t)DEF_RT_LF3_MS;
     p->rt_tn3_ms = (uint16_t)DEF_RT_TN3_MS;
+    p->rt_lf4_ms = (uint16_t)DEF_RT_LF4_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
     p->leg_down_deg = (uint8_t)DEF_LEG_DOWN_DEG;
@@ -451,6 +467,20 @@ void APP_Param_ResetDefault(void)
 void APP_Param_Init(void)
 {
     uint8_t loaded = 0u;
+
+    /* ---- 先数出"可见参数"的个数 ----
+     * 参数表约定：可见项（hidden = 0）排在前面，隐藏项排在最后。
+     * TUNE PARAMS 列表只遍历前 g_param_vis_count 项，所以这里数的是
+     * "从第 0 项开始连续有多少个 hidden = 0"。
+     * ★ 万一有人把可见项写到隐藏项后面，这里的计数会提前停下 ——
+     *   后果是那一项在 TUNE PARAMS 里看不见（但 ROUTE TIME 之类的
+     *   专用页按名字查，依然能找到）。这个失败方式是"少显示一项"，
+     *   而不是"菜单崩了"，可以接受。 */
+    g_param_vis_count = 0u;
+    while ((g_param_vis_count < g_param_count)
+           && (g_param_table[g_param_vis_count].hidden == 0u)) {
+        g_param_vis_count++;
+    }
 
 #if PARAM_FLASH_ENABLE
     loaded = APP_Param_Load();

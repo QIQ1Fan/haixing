@@ -62,6 +62,19 @@ static uint32_t s_beep2_tick  = 0u;
 #define ROUTE_BEEP2_ON_MS       70u     /* 每一声多久 */
 #define ROUTE_BEEP2_GAP_MS      150u    /* 两声之间的间隔（从第一声开始算） */
 
+/* ---- 预约式舵机动作队列 ----
+   用来表达"一边循线一边摆支撑脚"这类【时间上重叠】的动作。
+   队列只有几条，满了就立刻执行（宁可当场动一下，也不要静默丢掉） */
+#define ROUTE_SRVQ_MAX          8u
+
+typedef struct {
+    uint32_t at_ms;         /* 该执行的绝对时刻（HAL_GetTick 的刻度） */
+    uint8_t  deg;           /* 目标角度 */
+    uint8_t  used;          /* 1 = 这个槽里有预约 */
+} route_servo_evt_t;
+
+static route_servo_evt_t s_srvq[ROUTE_SRVQ_MAX];
+
 #define ROUTE_DRAW_PERIOD_MS    200u    /* 屏幕上刷新路线的周期 */
 
 /* ==========================================================================
@@ -122,6 +135,22 @@ static void route_tick(uint8_t use_car)
     } else if (s_beep2_stage == 2u) {
         if ((uint32_t)(now - s_beep2_tick) >= ROUTE_BEEP2_GAP_MS) {
             s_beep2_stage = 0u;
+        }
+    }
+
+    /* ---- ③.5 到点的预约舵机动作 ----
+       这就是"一边循线一边摆支撑脚"能实现的地方：循线段的等待循环
+       反复调 route_tick()，每 10ms 顺手检查一次有没有到点的舵机动作。
+       用的是"绝对时刻比较"，所以调用时机早晚几毫秒都不影响精度。 */
+    {
+        uint8_t q;
+
+        for (q = 0u; q < ROUTE_SRVQ_MAX; q++) {
+            if ((s_srvq[q].used != 0u)
+                && ((int32_t)(now - s_srvq[q].at_ms) >= 0)) {
+                s_srvq[q].used = 0u;
+                APP_Leg_SetTarget(s_srvq[q].deg);   /* 走斜坡过去，不硬顶 */
+            }
         }
     }
 
@@ -316,6 +345,25 @@ void Route_Servo(uint8_t deg)
     }
 }
 
+void Route_ServoAt(uint8_t deg, uint16_t after_ms)
+{
+    uint8_t i;
+
+    /* 找一个空槽登记。★ 用"绝对时刻"而不是"相对剩余时间"，
+       这样每拍只要比一次大小，不用担心节拍抖动累积误差 */
+    for (i = 0u; i < ROUTE_SRVQ_MAX; i++) {
+        if (s_srvq[i].used == 0u) {
+            s_srvq[i].used  = 1u;
+            s_srvq[i].deg   = deg;
+            s_srvq[i].at_ms = HAL_GetTick() + (uint32_t)after_ms;
+            return;
+        }
+    }
+
+    /* 队列满：不静默丢弃，立刻动一下 —— 少摆一次比"什么都没发生"好查 */
+    APP_Leg_SetTarget(deg);
+}
+
 void Route_ServoNow(uint8_t deg)
 {
     route_begin_step("SERVO NOW", 0u);
@@ -444,6 +492,15 @@ void APP_Route_Run(void)
     s_pump_tick = HAL_GetTick();
     s_draw_tick = HAL_GetTick();
 
+    /* 清掉上一次跑剩下的预约舵机动作，免得这次一启动就乱摆 */
+    {
+        uint8_t q;
+
+        for (q = 0u; q < ROUTE_SRVQ_MAX; q++) {
+            s_srvq[q].used = 0u;
+        }
+    }
+
     APP_Car_Stop();
     BSP_Motor_Stop();
 
@@ -467,6 +524,30 @@ void APP_Route_Run(void)
     Route_Beep2();
 
     Route_TurnLeft(g_param.rt_tn3_ms);      /* step6：左转 */
+    Route_Beep2();
+
+    /* ---------------- step7~10：上三级台阶（一边循线一边摆支撑脚）----------------
+     *
+     * ★ 这里的关键是【时间重叠】：车要一边循线往前走、一边让支撑脚上下摆动。
+     *   脚本是顺序执行的，表达不了"同时做两件事"，所以用 Route_ServoAt()
+     *   把三次舵机动作【预约】出去，然后立刻开始循线 ——
+     *   循线的这 5 秒里，后台节拍会按预约的时间点把舵机动到位。
+     *
+     *   时间轴（相对本段开始）：
+     *       t = 0.0s   支撑脚放下到 180°   （约 0.9 秒走完）
+     *       t = 2.0s   支撑脚升起到   0°   （约 0.9 秒走完）
+     *       t = 3.0s   支撑脚放下到 180°   （按你说的最后再放下 2 秒）
+     *       t = 5.0s   循线结束，本段收尾
+     *
+     *   ★ 角度值用参数 LEGDN / LEGUP（也就是菜单里标定过的"放下位/收起位"），
+     *     而不是写死 180 / 0 —— 这样以后标定改了角度，这里自动跟着改。
+     *   ★ 想让摆动更"甩"一点（不等它走完就折返），把后面的时间点往前提
+     *     （比如 2000 → 1200）：机构没走完就被叫回去，看起来就是快速抖动。 */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg,    0u);    /* t=0    放下 */
+    Route_ServoAt((uint8_t)g_param.leg_up_deg,   2000u);    /* t=2s   升起 */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, 3000u);    /* t=3s   再放下 */
+
+    Route_LineFollow(g_param.rt_lf4_ms);    /* ★ 这 5 秒一边循线一边摆脚 */
     Route_Beep2();
 
     /* 路线结束 */
