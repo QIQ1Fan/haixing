@@ -142,7 +142,10 @@ APP_Param_t g_param;
  *   否则"走 0.8 秒就刹车"会让人不停按 START，根本看不出控制效果。
  *   循迹整定好之后，想让它冲出赛道时自动停，改成 800~1500 即可。 */
 #define DEF_LOST_STOP_MS    6000
-#define DEF_CROSS_HOLD_MS   260         /* 十字路口保持直行 0.26 秒通过 */
+#define DEF_CROSS_HOLD_MS   260
+/* ★ 循迹"结果事件"的判定阈值（实测值，见头文件里的说明）*/
+#define DEF_BLK_MIN         7           /* 至少 7 路压线算"横线" */
+#define DEF_EVT_HOLD_MS     25          /* 图案保持 25ms 就算一次 */         /* 十字路口保持直行 0.26 秒通过 */
 
 /* ★ 默认 0 = 关闭堵转保护。
  *   它会判"给了占空比、编码器却一个计数都没有" —— 编码器如果还没接线，
@@ -173,6 +176,10 @@ APP_Param_t g_param;
  * 和 POST_ms 是一对：POST_ms 是"过横线后再循迹一段"，
  * STR_ms 是"过左三之后直接直走一段"（这时候不用循迹，直着走就行）*/
 #define DEF_RT_STR_MS       1000
+/* step5：上台阶时【每一步的间隔】（毫秒）。
+ * 时间轴： t=0 开始盲走 → t=1×UPST 放下 → 2× 升起 → 3× 放下 → 4× 升起，
+ * 全程车都在盲走（不停顿）。改这一个数，四个时间点一起等比变化 */
+#define DEF_RT_UPST_MS      1000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
@@ -217,6 +224,9 @@ const APP_ParamItem_t g_param_table[] = {
     /* ------------------------------- 丢线 ------------------------------- */
     { "LOSTTRN",  offsetof(APP_Param_t, lost_turn),    PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
     { "LOSTms",   offsetof(APP_Param_t, lost_stop_ms), PTYPE_U16,  0, 100.0f,    0.0f, 15000.0f },
+    /* ------------------- 循迹结果事件的判定阈值 -------------------------- */
+    { "BLKMIN",   offsetof(APP_Param_t, blk_min),       PTYPE_U8,   0,   1.0f,    1.0f,     8.0f },
+    { "EVTHLD",   offsetof(APP_Param_t, evt_hold_ms),   PTYPE_U16,  0,   5.0f,   10.0f,   500.0f },
     /* ------------------------------- 十字 ------------------------------- */
     { "CROSSms",  offsetof(APP_Param_t, cross_hold_ms),PTYPE_U16,  0,  50.0f,    0.0f,  2000.0f },
     /* ------------------------------- 保护 ------------------------------- */
@@ -232,6 +242,7 @@ const APP_ParamItem_t g_param_table[] = {
     { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "TN4_ms",   offsetof(APP_Param_t, rt_tn4_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "STR_ms",   offsetof(APP_Param_t, rt_str_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
+    { "UPST_ms",  offsetof(APP_Param_t, rt_upst_ms),   PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
@@ -331,6 +342,8 @@ static void param_fill_default(APP_Param_t *p)
     p->lost_turn    = (int16_t)DEF_LOST_TURN;
     p->lost_stop_ms = (uint16_t)DEF_LOST_STOP_MS;
 
+    p->blk_min       = (uint8_t)DEF_BLK_MIN;
+    p->evt_hold_ms   = (uint16_t)DEF_EVT_HOLD_MS;
     p->cross_hold_ms = (uint16_t)DEF_CROSS_HOLD_MS;
 
     p->stall_ms = (uint16_t)DEF_STALL_MS;
@@ -343,6 +356,7 @@ static void param_fill_default(APP_Param_t *p)
     p->rt_tn3_ms  = (uint16_t)DEF_RT_TN3_MS;
     p->rt_tn4_ms  = (uint16_t)DEF_RT_TN4_MS;
     p->rt_str_ms  = (uint16_t)DEF_RT_STR_MS;
+    p->rt_upst_ms = (uint16_t)DEF_RT_UPST_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
     p->leg_down_deg = (uint8_t)DEF_LEG_DOWN_DEG;

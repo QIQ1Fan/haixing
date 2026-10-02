@@ -55,6 +55,12 @@ static uint32_t s_draw_tick  = 0u;      /* 屏幕刷新节流 */
 static uint32_t s_step_start = 0u;      /* 本动作开始时刻 */
 static uint16_t s_step_ms    = 0u;      /* 本动作总时长（给屏幕显示剩余） */
 
+/* ---- ★ 从第几个阶段开始跑 ----
+ * 1 = 从头跑（正常情况）。菜单里选 "START STEP" 可以指定从某一步开始，
+ * 某一步失误之后就不用整条重来了。
+ * 见 APP_Route_RunFrom() 和脚本里每段开头的 if (s_from <= N) 判断。 */
+static uint8_t  s_from       = 1u;
+
 /* "鸣两声"阶段标记的后台状态机（0 = 空闲，1 = 第一声已响，2 = 第二声已响） */
 static uint8_t  s_beep2_stage = 0u;
 static uint32_t s_beep2_tick  = 0u;
@@ -63,6 +69,20 @@ static uint32_t s_beep2_tick  = 0u;
 #define ROUTE_BEEP2_GAP_MS      150u    /* 两声之间的间隔（从第一声开始算） */
 
 #define ROUTE_DRAW_PERIOD_MS    200u    /* 屏幕上刷新路线的周期 */
+
+/* ---- 预约式舵机动作队列 ----
+ * 用来表达"车一边盲走、舵机一边按时间点收放"这类【时间上重叠】的动作。
+ * 脚本是顺序执行的，一行不跑完不会跑下一行 —— 所以把舵机动作
+ * "预约"出去（只登记，立刻返回），真正的动作交给后台节拍按时间点执行。 */
+#define ROUTE_SRVQ_MAX          8u
+
+typedef struct {
+    uint32_t at_ms;         /* 该执行的绝对时刻（HAL_GetTick 刻度） */
+    uint8_t  deg;           /* 目标角度 */
+    uint8_t  used;          /* 1 = 这个槽里有预约 */
+} route_servo_evt_t;
+
+static route_servo_evt_t s_srvq[ROUTE_SRVQ_MAX];
 
 /* ==========================================================================
  * 内部：一个 10ms 的"小主循环"
@@ -122,6 +142,23 @@ static void route_tick(uint8_t use_car)
     } else if (s_beep2_stage == 2u) {
         if ((uint32_t)(now - s_beep2_tick) >= ROUTE_BEEP2_GAP_MS) {
             s_beep2_stage = 0u;
+        }
+    }
+
+    /* ---- ③.5 到点的预约舵机动作 ----
+       盲走段（Route_Straight）的等待循环反复调 route_tick()，
+       每 10ms 顺手检查一次有没有到点的舵机动作 —— 这就是
+       "车不停顿地走、舵机按点收放"能实现的地方。
+       用绝对时刻比较，所以节拍抖动几毫秒不影响动作时刻。 */
+    {
+        uint8_t q;
+
+        for (q = 0u; q < ROUTE_SRVQ_MAX; q++) {
+            if ((s_srvq[q].used != 0u)
+                && ((int32_t)(now - s_srvq[q].at_ms) >= 0)) {
+                s_srvq[q].used = 0u;
+                APP_Leg_SetTarget(s_srvq[q].deg);   /* 走斜坡过去，不硬顶 */
+            }
         }
     }
 
@@ -414,6 +451,25 @@ void Route_Servo(uint8_t deg)
     }
 }
 
+void Route_ServoAt(uint8_t deg, uint16_t after_ms)
+{
+    uint8_t i;
+
+    /* 找一个空槽登记。★ 记的是"绝对时刻"而不是"还要等多久"，
+       这样每拍只要比一次大小，不用担心节拍抖动累积误差 */
+    for (i = 0u; i < ROUTE_SRVQ_MAX; i++) {
+        if (s_srvq[i].used == 0u) {
+            s_srvq[i].used  = 1u;
+            s_srvq[i].deg   = deg;
+            s_srvq[i].at_ms = HAL_GetTick() + (uint32_t)after_ms;
+            return;
+        }
+    }
+
+    /* 队列满：不静默丢弃，立刻动一下 —— 少摆一次比"什么都没发生"好查 */
+    APP_Leg_SetTarget(deg);
+}
+
 void Route_ServoNow(uint8_t deg)
 {
     route_begin_step("SERVO NOW", 0u);
@@ -534,6 +590,68 @@ void APP_Route_Abort(void)
  *       一直等不到      嘀——（长，60 秒安全网）
  * ========================================================================== */
 
+/* --------------------------------------------------------------------------
+ * ★ 各阶段的"计数器预置值"
+ * --------------------------------------------------------------------------
+ * 脚本里等的是【绝对第几根横线】（第 4 根、第 5 根……），
+ * 所以从中间某一步开始跑时，必须把计数器先垫成"前面那些步骤跑完之后
+ * 应该有的数"，否则它会一直等一个永远不会来的编号。
+ *
+ * s_step_preset_black[n] = 从第 n 步开始跑时，BLACK 计数器预置成多少
+ *   第 1 步：0  （什么都没数过）
+ *   第 2 步：0  （它自己等第 1 根）
+ *   第 3 步：1  （第 1 根已经数过了）
+ *   第 4 步：4  （第 4 根已经数过了 —— step4 自己等第 5 根）
+ *   第 5 步：6  （第 6 根已经数过了 —— step5 自己等第 8 根）
+ *
+ * ★ 改了路线里等的编号（比如把 UntilBlack(6u) 改成 7u），
+ *   这张表要跟着改，否则"从中间开始跑"会对不上。
+ * ★ LEFT3 不用预置：step1 等它的第 1 次（只有从头跑才用），
+ *   step4 里用的是"下一次"（相对），不依赖前面的次数。
+ * -------------------------------------------------------------------------- */
+#define ROUTE_STEP_NUM      5u
+
+static const uint16_t s_step_preset_black[ROUTE_STEP_NUM + 1u] = {
+    0u,     /* [0] 占位，不用 */
+    0u,     /* 从第 1 步开始 */
+    0u,     /* 从第 2 步开始 */
+    1u,     /* 从第 3 步开始 */
+    4u,     /* 从第 4 步开始 */
+    6u      /* 从第 5 步开始 */
+};
+
+/** 第 n 步的短名字（给"从哪一步开始"的菜单页显示用） */
+const char *APP_Route_StepName(uint8_t step)
+{
+    switch (step) {
+    case 1u: return "start -> blind";
+    case 2u: return "line1 -> left";
+    case 3u: return "line4 -> blind";
+    case 4u: return "line5/6 -> left";
+    case 5u: return "stairs + servo";
+    default: return "----";
+    }
+}
+
+uint8_t APP_Route_StepCount(void)
+{
+    return (uint8_t)ROUTE_STEP_NUM;
+}
+
+void APP_Route_RunFrom(uint8_t step)
+{
+    /* 夹到合法范围：菜单传进来的值可能越界（比如参数被改坏） */
+    if (step < 1u) {
+        step = 1u;
+    }
+    if (step > (uint8_t)ROUTE_STEP_NUM) {
+        step = (uint8_t)ROUTE_STEP_NUM;
+    }
+    s_from = step;
+
+    APP_Route_Run();
+}
+
 void APP_Route_Run(void)
 {
     /* ---- 进入路线模式：先把状态清干净 ---- */
@@ -549,6 +667,24 @@ void APP_Route_Run(void)
        计数器在待机时也在更新（方便推着车标定），所以这一步不能省。 */
     APP_Car_ResetEventCounts();
 
+    /* ★ 从中间某一步开始时，把 BLACK 计数器垫到"前面步骤跑完后的值"，
+       否则它会一直等一个永远不会来的编号（见上面的预置表）。
+       从头跑（s_from = 1）时预置值就是 0，等于没做。 */
+    {
+        uint16_t preset = s_step_preset_black[s_from];
+
+        APP_Car_SetEventCount((uint8_t)APP_CAR_EVT_BLACK, preset);
+    }
+
+    /* 清掉上一次跑剩下的预约舵机动作，免得这次一启动就乱摆 */
+    {
+        uint8_t q;
+
+        for (q = 0u; q < ROUTE_SRVQ_MAX; q++) {
+            s_srvq[q].used = 0u;
+        }
+    }
+
     APP_Car_Stop();
     BSP_Motor_Stop();
 
@@ -559,10 +695,16 @@ void APP_Route_Run(void)
     /* ===================== step1：起步 → 盲走 ============================
      * 发车后正常循迹，等"最左三路全压线"出现第 1 次 ——
      * 线跑到车头左边去了，说明到了该盲走的位置。
-     * 然后闭着眼睛直冲 BLD1_ms 过掉这一段。 */
+     * 然后闭着眼睛直冲 BLD1_ms 过掉这一段。
+     *
+     * ★ 每一段外面那层 if (s_from <= N) 就是"从第几步开始跑"的实现：
+     *   s_from = 1 时全部执行（正常）；菜单里选从第 3 步开始，
+     *   前两段整段跳过，直接从 step3 往下跑。 */
+    if (s_from <= 1u) {
     Route_LineFollowUntilLeft3(1u);
     Route_Straight(g_param.rt_bld1_ms);     /* ★ 盲走 7.5 秒（菜单 ROUTE TIME 里调）*/
     Route_Beep2();
+    }
 
     /* ============ step2：第 1 根横线 → 再循迹一段 → 左转 ================
      * 回到循迹模式，一直循到第 1 根横线（八路全压）。
@@ -574,11 +716,15 @@ void APP_Route_Run(void)
      *   再原地左转，落点才准。
      *
      * ★ 想让车走得更靠前一点再转，就把 POST_ms 调大（菜单 ROUTE TIME 页）。
-     *   后面 step4 那次左转如果也有同样问题，照着加一行就行。 */
+     *   ★ 三条"横线后接左转"现在都加了这一小段（step2 / step4① / step4③），
+     *     用的是同一个 POST_ms —— 调一个数三条一起变，省得分别标定。
+     *     （step4② 那次是"左三压线"触发，用的是盲走 STR_ms，见那一节）*/
+    if (s_from <= 2u) {
     Route_LineFollowUntilBlack(1u);
     Route_LineFollow(g_param.rt_post_ms);   /* ★ 过线后再循迹 1.5 秒，走到线中心 */
     Route_TurnLeft(g_param.rt_tn1_ms);
     Route_Beep2();
+    }
 
     /* ===================== step3：第 4 根横线 → 盲走 =====================
      * ★ 注意这里等的是【第 4 根】：
@@ -586,17 +732,23 @@ void APP_Route_Run(void)
      *   计数器照样在数，所以"等到第 4 根"就是"开过前面那两根之后"。
      *   ★ 跑的时候听声音：每过一根横线会"嘀"一声，
      *     听到第 4 声之后就该盲走了。 */
+    if (s_from <= 3u) {
     Route_LineFollowUntilBlack(4u);
     Route_Straight(g_param.rt_bld2_ms);     /* ★ 盲走（默认 5.5 秒）*/
     Route_Beep2();
+    }
 
     /* ============== step4：第 5 根横线 → 左转 → 左三 → 直走 → 左转
      *                          → 第 6 根横线 → 左转 ==========================
      * 盲走结束回到循迹模式：
-     *     ① 循到第 5 根横线                → 左转
-     *     ② 再次循迹，检测到最左三路全压线  → 直走 1 秒 → 左转
-     *     ③ 回到循迹模式，循到第 6 根横线   → 左转
+     *     ① 循到第 5 根横线                → 再循迹 POST_ms → 左转
+     *     ② 再次循迹，检测到最左三路全压线  → 盲走 STR_ms   → 左转
+     *     ③ 回到循迹模式，循到第 6 根横线   → 再循迹 POST_ms → 左转
      *     → 路线结束
+     *
+     * ★ ①③ 这两段"过线后再走一小段"是实测出来的：车架大，压到横线的那一刻
+     *   车身还没摆正，直接原地转会转歪。多走这一小段，循迹环把车纠到
+     *   "线在探头正中间"，再转落点才准。时长就是 POST_ms，和 step2 共用一个。
      *
      * ★ 第 ② 步用的是 Route_LineFollowUntilNextLeft3()（等"下一次"左三压线），
      *   而不是写死"第 2 次"：左三压线在一趟里可能已经出现过好几次
@@ -604,7 +756,9 @@ void APP_Route_Run(void)
      *   "下一次"永远是对的。
      * ★ 第 ② 步的"直走"用 Route_Straight()：这时候不看线、两轮同速直冲，
      *   和 step1 的盲走是同一个原语，时长在菜单 ROUTE TIME 的 STR_ms 里。 */
+    if (s_from <= 4u) {
     Route_LineFollowUntilBlack(5u);
+    Route_LineFollow(g_param.rt_post_ms);   /* ★ 过线后再循迹一小段，把车身摆正 */
     Route_TurnLeft(g_param.rt_tn2_ms);
     Route_Beep2();
 
@@ -614,8 +768,56 @@ void APP_Route_Run(void)
     Route_Beep2();
 
     Route_LineFollowUntilBlack(6u);
+    Route_LineFollow(g_param.rt_post_ms);   /* ★ 同上 */
     Route_TurnLeft(g_param.rt_tn3_ms);
     Route_Beep2();
+    }
+
+    /* ================== step5：上三阶台阶（全程不停顿地盲走）===============
+     *
+     * ★ 台阶是【全黑】的 —— 在探头看来和"横线"是同一种图案，
+     *   所以它同样会被 BLACK 计数器数到（连续全黑只算一次）。
+     *   实测：数到【第 8 根】的时候，车刚好停在台阶前。
+     *
+     * 时间轴（t = 0 就是"检测到第 8 根线"的那一刻）：
+     *
+     *      t = 0s    车开始【盲走】—— 从这里一直到 t=4s，车不停、不循线、直着走
+     *      t = 1s    支撑脚放下（撑起车身）
+     *      t = 2s    支撑脚升起
+     *      t = 3s    支撑脚再放下
+     *      t = 4s    支撑脚升起 —— 到这一刻整个 step5 结束
+     *
+     * ★★ 关键：舵机的四个动作是【预约】出去的（Route_ServoAt），
+     *    调用它们只花几微秒就返回，真正的动作由后台节拍按时间点执行 ——
+     *    所以车从 t=0 到 t=4s 一直在盲走，中间【一次都不停】。
+     *    如果用 Route_Servo()（走过去再等它到位），车就会在每一拍停一下，
+     *    那是爬不上台阶的。
+     *
+     * ★ 每一个动作间隔 = UPST_ms（菜单 ROUTE TIME 页最后一项，默认 1 秒）。
+     *   改这一个数，四个时间点和总时长一起等比变化
+     *   （总盲走时长 = 4 × UPST_ms）。
+     *
+     * ★ 想让收放更"甩"（不等舵机走完就折返），把 UPST_ms 调到 500 左右；
+     *   想让它每个位置停稳一点，就调到 1200~1500。 */
+    if (s_from <= 5u) {
+    Route_LineFollowUntilBlack(8u);         /* 循到第 8 根（台阶前）*/
+
+    {
+        uint16_t t = g_param.rt_upst_ms;    /* 台阶上每一步的间隔（默认 1 秒）*/
+
+        /* ---- 先把四次舵机动作预约好（立刻返回，车这就开始走）---- */
+        Route_ServoAt((uint8_t)g_param.leg_down_deg, (uint16_t)(t * 1u));
+        Route_ServoAt((uint8_t)g_param.leg_up_deg,   (uint16_t)(t * 2u));
+        Route_ServoAt((uint8_t)g_param.leg_down_deg, (uint16_t)(t * 3u));
+        Route_ServoAt((uint8_t)g_param.leg_up_deg,   (uint16_t)(t * 4u));
+
+        /* ---- 然后一直盲走到最后一次收脚完成 ----
+           这期间车不停：舵机的四次收放由后台节拍按上面的时间点执行 */
+        Route_Straight((uint16_t)(t * 4u));
+    }
+
+    Route_Beep2();
+    }
 
     /* 路线结束 */
     Route_Beep(400u);                   /* 结尾用一声长音，和中间的"两声"区分开 */

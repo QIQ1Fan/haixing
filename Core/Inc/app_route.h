@@ -62,6 +62,29 @@ void APP_Route_Enter(void);
   */
 void APP_Route_Run(void);
 
+/**
+  * @brief  ★ 从指定的阶段开始跑路线
+  * @param  step 1 = 从头跑，2..APP_Route_StepCount() = 从第几步开始
+  *
+  * 【为什么要有它】
+  *   整条跑一次要几十秒，某一步失误（比如台阶没上去）之后，
+  *   如果只能从头再来，试一次的成本非常高。
+  *   指定从失误的那一步开始，就能反复练那一步。
+  *
+  * 【它额外做了两件事】
+  *   ① 把脚本里前面那些段整段跳过（见 app_route.c 里的 if (s_from <= N)）
+  *   ② ★ 把"横线计数器"垫到前面步骤跑完之后应该有的值 ——
+  *      脚本里等的是【绝对第几根横线】，不预置的话它会等一个永远不来的编号
+  *      （预置表在 app_route.c 顶部，改路线编号时要一起改）
+  */
+void APP_Route_RunFrom(uint8_t step);
+
+/** @brief 路线一共几个阶段 */
+uint8_t APP_Route_StepCount(void);
+
+/** @brief 第 n 步的短名字（ASCII，给菜单显示用） */
+const char *APP_Route_StepName(uint8_t step);
+
 /** @brief 是否正在跑路线 */
 uint8_t APP_Route_IsActive(void);
 
@@ -164,6 +187,30 @@ void Route_Servo(uint8_t deg);
 
 /** @brief 支撑脚立刻到位（不走斜坡）。标定时用，机构脆的话慎用 */
 void Route_ServoNow(uint8_t deg);
+
+/**
+  * @brief  ★ 预约一次舵机动作："after_ms 毫秒之后把支撑脚移到 deg 度"
+  * @param  deg      目标角度 0~180
+  * @param  after_ms 从现在起多少毫秒后执行
+  *
+  * 【为什么需要它 —— 让舵机和行驶"同时进行"】
+  *   脚本是顺序执行的，一行不跑完不会跑下一行。可是爬台阶时车必须
+  *   【一直不停顿地往前走】【同时让支撑脚按节奏收放】——
+  *   这两件事在时间上是重叠的，顺序写法表达不出来。
+  *
+  *   于是把舵机动作"预约"出去：调用只花几微秒就返回，
+  *   真正的动作交给后台节拍按时间点执行。写法：
+  *
+  *       Route_ServoAt(LEGDN, 1000u);   // 1 秒后放下
+  *       Route_ServoAt(LEGUP, 2000u);   // 2 秒后升起
+  *       Route_Straight(2000u);         // ★ 这 2 秒车一直在盲走，
+  *                                      //   舵机在后台按点动作
+  *
+  *   注意角度是走 app_leg 的斜坡（每 10ms 走 2°，180° 约 0.9 秒走完），
+  *   所以两个时间点之间留够 1 秒以上动作才走得完整；
+  *   留得少就是"摆到一半又折回去"，正是快速抖动的效果。
+  */
+void Route_ServoAt(uint8_t deg, uint16_t after_ms);
 
 /** @brief 停车并等待 ms 毫秒（滑行停） */
 void Route_Stop(uint16_t ms);

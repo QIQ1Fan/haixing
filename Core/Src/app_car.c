@@ -112,25 +112,62 @@ typedef struct {
 
 static car_evt_t s_evt[APP_CAR_EVT_NUM];
 
-/* 三个通道对应的图案掩码（bsp_config.h 里可改） */
+/* LEFT3 / RIGHT3 的图案掩码（bsp_config.h 里可改）。
+   ★ BLACK 不走掩码，改成"至少几路压线"（参数 BLKMIN）——
+     不要求八路全压，车稍微歪一点、或者横线比探头排窄一点，也照样算一根，
+     比死等 0xFF 稳得多。 */
 static const uint8_t s_evt_mask[APP_CAR_EVT_NUM] = {
     CAR_EVT_MASK_LEFT3,     /* APP_CAR_EVT_LEFT3 */
     CAR_EVT_MASK_RIGHT3,    /* APP_CAR_EVT_RIGHT3 */
-    CAR_EVT_MASK_BLACK      /* APP_CAR_EVT_BLACK */
+    0x00u                   /* APP_CAR_EVT_BLACK：不用掩码 */
 };
+
+/** 数一个字节里有几个 1（压线几路） */
+static uint8_t car_popcount(uint8_t v)
+{
+    uint8_t n = 0u;
+
+    while (v != 0u) {
+        n = (uint8_t)(n + (uint8_t)(v & 1u));
+        v = (uint8_t)(v >> 1);
+    }
+    return n;
+}
+
+/**
+  * @brief  判断某个通道的"图案出现了没有"
+  * @param  ch     通道
+  * @param  mask   当前压线掩码
+  * @param  nblk   当前压线几路
+  */
+static uint8_t car_evt_present(uint8_t ch, uint8_t mask, uint8_t nblk)
+{
+    switch (ch) {
+    case (uint8_t)APP_CAR_EVT_BLACK:
+        /* ★ 至少 BLKMIN 路压线就算"横线"（默认 7 路）。
+           参数在菜单 TUNE PARAMS 里，改完立刻生效 */
+        return (nblk >= g_param.blk_min) ? 1u : 0u;
+
+    case (uint8_t)APP_CAR_EVT_LEFT3:
+    case (uint8_t)APP_CAR_EVT_RIGHT3:
+    default:
+        return ((mask & s_evt_mask[ch]) == s_evt_mask[ch]) ? 1u : 0u;
+    }
+}
 
 /**
   * @brief  推进一个事件通道
   * @param  mask    当前压线掩码
   * @param  dt_ms   本拍经过的毫秒
-  * @note   算法就是"保持 + 重新武装"，两个阈值都在 bsp_config.h：
-  *           图案连续保持 >= CAR_EVT_HOLD_MS  → 计数 +1（并要求已武装）
+  * @note   算法就是"保持 + 重新武装"：
+  *           图案连续保持 >= 参数 EVTHLD     → 计数 +1（并要求已武装）
   *           计过之后图案连续消失 >= CAR_EVT_REARM_MS → 重新武装
+  *         "什么算全黑"由参数 BLKMIN 决定（至少几路压线）
   */
 static void car_evt_update(uint8_t ch, uint8_t mask, uint16_t dt_ms)
 {
     car_evt_t *e = &s_evt[ch];
-    uint8_t present = ((mask & s_evt_mask[ch]) == s_evt_mask[ch]) ? 1u : 0u;
+    uint8_t present = car_evt_present(ch, mask, car_popcount(mask));
 
     if (present != 0u) {
         e->away = 0u;
@@ -141,7 +178,7 @@ static void car_evt_update(uint8_t ch, uint8_t mask, uint16_t dt_ms)
 
         /* 达到保持时间、而且"已武装" → 计一次，并立刻缴械，
            避免同一根横线被反复计数 */
-        if ((e->armed != 0u) && (e->hold >= CAR_EVT_HOLD_MS)) {
+        if ((e->armed != 0u) && (e->hold >= g_param.evt_hold_ms)) {
             e->armed = 0u;
             if (e->cnt < 0xFFFFu) {
                 e->cnt++;
@@ -370,6 +407,26 @@ uint16_t APP_Car_GetEventCount(uint8_t evt)
         return 0u;
     }
     return s_evt[evt].cnt;
+}
+
+void APP_Car_SetEventCount(uint8_t evt, uint16_t v)
+{
+    if (evt >= (uint8_t)APP_CAR_EVT_NUM) {
+        return;
+    }
+
+    s_evt[evt].cnt   = v;
+    s_evt[evt].hold  = 0u;
+    s_evt[evt].away  = 0u;
+    s_evt[evt].armed = 1u;      /* 重新武装：下一个图案就能计上 */
+
+    if (evt == (uint8_t)APP_CAR_EVT_LEFT3) {
+        s_st.cnt_left3 = v;
+    } else if (evt == (uint8_t)APP_CAR_EVT_RIGHT3) {
+        s_st.cnt_right3 = v;
+    } else {
+        s_st.cnt_black = v;
+    }
 }
 
 void APP_Car_ResetEventCounts(void)

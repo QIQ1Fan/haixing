@@ -89,7 +89,7 @@
 #define MENU_ROWS           6u      /* 主菜单 / 参数列表一屏能显示几行（page1..6） */
 #define MENU_LIVE_ROWS      4u      /* 行驶中调参页一屏几行（page1..4） */
 #define MENU_LIVE_MAX       6u      /* 行驶中调参最多放几个参数 */
-#define MENU_RT_NUM         8u      /* ROUTE TIME 页最多放几项（现在 8 项，超一屏会滚动）*/
+#define MENU_RT_NUM         9u      /* ROUTE TIME 页最多放几项（现在 9 项，超一屏会滚动）*/
 #define MENU_RT_ROWS        6u      /* 一屏显示几行（page1..6）*/
 #define MENU_VAL_X          66u     /* 列表里"值"的列（名字最长 8 字符 = 60 像素）*/
 
@@ -102,6 +102,7 @@
 typedef enum {
     MI_TOGGLE_RUN = 0,      /* START CAR / STOP CAR（直接循迹，调参时用）*/
     MI_RUN_ROUTE,           /* ★ RUN ROUTE：执行 app_route.c 里的整条路线脚本 */
+    MI_START_STEP,          /* ★ START STEP：从指定阶段开始跑（某步失误后不用重头来）*/
     MI_TUNE_PARAM,          /* → UI_PARAM_LIST */
     MI_ROUTE_TIME,          /* → UI_ROUTE_TIME：调试路线各段时长 */
     MI_LEG,                 /* → UI_LEG */
@@ -118,6 +119,7 @@ typedef enum {
     UI_MENU,                /* 主菜单 */
     UI_PARAM_LIST,          /* 参数列表 */
     UI_PARAM_EDIT,          /* 参数编辑 */
+    UI_START_STEP,          /* 从第几个阶段开始跑 */
     UI_ROUTE_TIME,          /* 路线各段时长（调试用） */
     UI_LEG,                 /* 支撑脚 */
     UI_SENSOR,              /* 传感器检查 */
@@ -140,6 +142,7 @@ typedef enum {
 static const char *const s_menu_name[MI_NUM] = {
     "START CAR",
     "RUN ROUTE",
+    "START STEP",
     "TUNE PARAMS",
     "ROUTE TIME",
     "SUPPORT LEG",
@@ -163,12 +166,14 @@ static const char *const s_menu_name[MI_NUM] = {
  * ========================================================================== */
 static const char *const s_rt_name[MENU_RT_NUM] = {
     "BLD1_ms", "POST_ms", "TN1_ms", "BLD2_ms", "TN2_ms", "TN3_ms",
-    "TN4_ms", "STR_ms"
+    "TN4_ms", "STR_ms", "UPST_ms"
 };
 static uint8_t s_rt_idx[MENU_RT_NUM];       /* 参数表里的真实索引 */
 static uint8_t s_rt_cnt = 0u;               /* 实际找到几项 */
 static uint8_t s_rt_sel = 0u;               /* 光标（在 s_rt_idx 里的位置）*/
 static uint8_t s_rt_top = 0u;               /* 滚动窗口的首项 */
+
+static uint8_t s_step_sel = 1u;             /* "从第几步开始跑"选中的步号 */
 
 /* 行驶中调参页关心的参数名。按名字查索引，查不到就跳过 ——
    这样以后参数表改名/删参数，这里不会编译报错，最多少显示一行 */
@@ -658,6 +663,75 @@ static void menu_draw_param_edit(void)
 
 
 /* --------------------------------------------------------------------------
+ * UI_START_STEP —— 从第几个阶段开始跑
+ *   page0    标题
+ *   page1..5 五个阶段：序号 + 短名字，光标 '>'
+ *   page6    当前选中的那一步从哪开始（更详细的说明留给注释）
+ *   page7    按键提示
+ * -------------------------------------------------------------------------- */
+static void menu_draw_start_step(void)
+{
+    uint8_t n = APP_Route_StepCount();
+    uint8_t i;
+
+    BSP_OLED_Printf(0u, 0u, "START STEP %u/%u",
+                    (unsigned int)s_step_sel, (unsigned int)n);
+
+    for (i = 1u; i <= n && i <= MENU_ROWS; i++) {
+        BSP_OLED_Printf(0u, i, "%c%u %s",
+                        (i == s_step_sel) ? '>' : ' ',
+                        (unsigned int)i,
+                        APP_Route_StepName(i));
+    }
+
+    BSP_OLED_DrawString(0u, 6u, "K1:GO FROM HERE");
+    BSP_OLED_DrawString(0u, 7u, "K2:BK K3+K4-");
+}
+
+static uint8_t menu_key_start_step(uint8_t key, uint8_t evt)
+{
+    uint8_t n = APP_Route_StepCount();
+
+    (void)evt;
+
+    if ((key == (uint8_t)MKEY_PLUS) || (key == (uint8_t)MKEY_MINUS)) {
+        if (n == 0u) {
+            return 0u;
+        }
+        if (key == (uint8_t)MKEY_PLUS) {
+            s_step_sel = (uint8_t)((s_step_sel + n - 2u) % n + 1u);
+        } else {
+            s_step_sel = (uint8_t)(s_step_sel % n + 1u);
+        }
+        return 1u;
+    }
+
+    if (key == (uint8_t)MKEY_BACK) {
+        s_page = (uint8_t)UI_MENU;
+        return 1u;
+    }
+
+    if (key == (uint8_t)MKEY_OK) {
+        /* ★ 进入阻塞式跑路线：跑完（或长按 K2 中止）才回来。
+           跑之前把屏幕清干净 —— 路线模块会独占屏幕 */
+        BSP_OLED_Clear();
+        BSP_OLED_Refresh();
+
+        APP_Route_RunFrom(s_step_sel);
+
+        /* 回来后整屏重画（路线期间屏幕被它自己用过，显存对比已不可信）*/
+        BSP_OLED_Clear();
+        BSP_OLED_MarkAllDirty();
+        s_force_draw = 1u;
+        s_page       = (uint8_t)UI_MENU;
+        menu_set_msg("ROUTE DONE", MENU_MSG_MS);
+        return 1u;
+    }
+
+    return 0u;
+}
+
+/* --------------------------------------------------------------------------
  * UI_ROUTE_TIME —— 路线里"还要用时间的那几段"一屏调完
  *   page0    标题 + 光标位置 + 总时长
  *   page1..6 六行：名字 + 数值（毫秒），光标 '>'（项数多于一屏时滚动）
@@ -924,6 +998,7 @@ static void menu_draw(void)
     case (uint8_t)UI_MENU:       menu_draw_menu();       break;
     case (uint8_t)UI_PARAM_LIST: menu_draw_param_list(); break;
     case (uint8_t)UI_PARAM_EDIT: menu_draw_param_edit(); break;
+    case (uint8_t)UI_START_STEP: menu_draw_start_step(); break;
     case (uint8_t)UI_ROUTE_TIME: menu_draw_route_time(); break;
     case (uint8_t)UI_LEG:        menu_draw_leg();        break;
     case (uint8_t)UI_SENSOR:     menu_draw_sensor();     break;
@@ -1020,6 +1095,12 @@ static uint8_t menu_key_menu(uint8_t key, uint8_t evt)
         }
         /* 启停之后立刻切回状态页：用户最想看的就是它跑起来的样子 */
         s_page = (uint8_t)UI_STATUS;
+        break;
+
+    case MI_START_STEP:
+        /* ★ 从指定阶段开始跑：进页面选第几步，K1 = 从那里开始 */
+        s_step_sel = 1u;
+        s_page     = (uint8_t)UI_START_STEP;
         break;
 
     case MI_RUN_ROUTE:
@@ -1410,6 +1491,7 @@ static uint8_t menu_dispatch(uint8_t key, uint8_t evt)
     case (uint8_t)UI_MENU:       return menu_key_menu(key, evt);
     case (uint8_t)UI_PARAM_LIST: return menu_key_param_list(key, evt);
     case (uint8_t)UI_PARAM_EDIT: return menu_key_param_edit(key, evt);
+    case (uint8_t)UI_START_STEP: return menu_key_start_step(key, evt);
     case (uint8_t)UI_ROUTE_TIME: return menu_key_route_time(key, evt);
     case (uint8_t)UI_LEG:        return menu_key_leg(key, evt);
     case (uint8_t)UI_SENSOR:     return menu_key_sensor(key, evt);

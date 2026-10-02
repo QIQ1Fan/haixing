@@ -158,6 +158,17 @@ const char *APP_Car_StateName(uint8_t state);
 uint16_t APP_Car_GetEventCount(uint8_t evt);
 
 /**
+  * @brief  ★ 直接设置某个事件计数器的值
+  * @param  evt APP_CAR_EVT_LEFT3 / RIGHT3 / BLACK
+  * @param  v   要设成的值
+  * @note   给"从中间某一步开始跑"用的：脚本里等的是【绝对第几根横线】，
+  *         从第 5 步开始跑时，必须先把 BLACK 垫成"前面步骤跑完后的值"，
+  *         否则它会一直等一个永远不来的编号。
+  *         设完把该通道重新武装，这样下一个图案马上能计上。
+  */
+void APP_Car_SetEventCount(uint8_t evt, uint16_t v);
+
+/**
   * @brief  清零三个事件计数器（每趟路线开始时调一次）
   * @note   计数器在【待机时也会更新】—— 这样你可以推着车走一遍赛道，
   *         在屏幕上看着计数对不对，不用真的开车。
