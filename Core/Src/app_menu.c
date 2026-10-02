@@ -159,7 +159,8 @@ static const char *const s_menu_name[MI_NUM] = {
  *   所以参数表改名/加项都不会让这一页失效（查不到就跳过那一行）。
  * ========================================================================== */
 static const char *const s_rt_name[MENU_RT_NUM] = {
-    "LF1_ms", "TN1_ms", "LF2_ms", "TN2_ms", "LF3_ms", "TN3_ms", "LF4_ms"
+    "LF1_ms", "TN1_ms", "LF2_ms", "TN2_ms", "LF3_ms", "TN3_ms", "LF4_ms",
+    "CROSS_ms"
 };
 static uint8_t s_rt_idx[MENU_RT_NUM];       /* 参数表里的真实索引 */
 static uint8_t s_rt_cnt = 0u;               /* 实际找到几项 */
@@ -468,7 +469,7 @@ static void menu_enter_live(void)
 /* --------------------------------------------------------------------------
  * UI_STATUS —— 状态页。信息最多的一页，8 页各有分工：
  *   page0 标题 + 车状态      page4 轮速与转速
- *   page1 误差指示条         page5 掩码 + 丢线计时 / 十字标志
+ *   page1 误差指示条         page5 掩码 + 丢线计时 + 丢线次数 N
  *   page2 误差/转向量/基础速度 page6 运行时间 + 里程
  *   page3 八路探头方框       page7 按键提示
  * -------------------------------------------------------------------------- */
@@ -509,11 +510,18 @@ static void menu_draw_status(void)
                     (double)st->rpm_l, (double)st->rpm_r,
                     (int)st->spd_l, (int)st->spd_r);
 
-    /* page5：压线掩码 + 丢线累计毫秒 + 十字标志 */
-    BSP_OLED_Printf(0u, 5u, "M%s L%4u %s",
+    /* page5：压线掩码 + 丢线累计毫秒 + ★ 丢线次数 N
+     *
+     * ★ N 就是"全丢黑线"的次数，也是路线脚本里用的"地形编号"：
+     *     第 1 次丢线 = 第 1 个地形（石块）
+     *     第 2 次丢线 = 第 2 个地形（草地+减速带） ...
+     *   跑车时盯着这个数，就能确认"计数对不对得上地形"，
+     *   标定阶段非常有用（比如草地和减速带被数成两次，一看就知道）。
+     *   原来的 CROSS 标志去掉了：掩码全 1 就是十字，看 M 那一串即可 */
+    BSP_OLED_Printf(0u, 5u, "M%s L%4u N%2u",
                     mask_str,
                     (unsigned int)st->lost_ms,
-                    (st->crossing != 0u) ? "CROSS" : "-----");
+                    (unsigned int)st->lost_cnt);
 
     /* page6：运行时间（秒）和两轮里程计数 */
     BSP_OLED_Printf(0u, 6u, "T%5us %6ld/%6ld",

@@ -164,9 +164,15 @@ APP_Param_t g_param;
 #define DEF_RT_TN2_MS       900         /* step4 左转 ★ 待标定 */
 #define DEF_RT_LF3_MS       15000       /* step5 循线 15s */
 #define DEF_RT_TN3_MS       900         /* step6 左转 ★ 待标定 */
-/* step7：上台阶那一段的循线时长。这 5 秒里车一边循线，
-   支撑脚一边按 Route_ServoAt() 排好的时间点摆动（见 app_route.c） */
-#define DEF_RT_LF4_MS       5000        /* step7 循线 5s（同时做舵机摆动）*/
+/* step7：上台阶那一段的循线时长（毫秒）。
+   这 5 秒里车一边循线往前走，支撑脚一边按 Route_ServoAt() 排好的
+   时间点上下摆动（见 app_route.c）。实测台阶的线中断很短，
+   普通循迹就能开过去，不需要特殊处理 */
+#define DEF_RT_LF4_MS       5000        /* 循线到上台阶地形的最长时间 */
+/* 穿一块地形时"盲走"的时间上限（毫秒）。
+ * ★ 它是【超时兜底】不是【计时走】：正常由"重新连续看到线"收尾。
+ *   给正常穿越时间的两三倍 —— 电池掉电压时穿得慢，别卡太紧。 */
+#define DEF_RT_CROSS_MS     8000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
@@ -238,6 +244,7 @@ const APP_ParamItem_t g_param_table[] = {
     { "LF3_ms",   offsetof(APP_Param_t, rt_lf3_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f, 1u },
     { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f, 1u },
     { "LF4_ms",   offsetof(APP_Param_t, rt_lf4_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f, 1u },
+    { "CROSS_ms", offsetof(APP_Param_t, rt_cross_ms),  PTYPE_U16,  0, 500.0f, 1000.0f, 30000.0f, 1u },
 };
 
 const uint8_t g_param_count = (uint8_t)(sizeof(g_param_table) / sizeof(g_param_table[0]));
@@ -346,6 +353,7 @@ static void param_fill_default(APP_Param_t *p)
     p->rt_lf3_ms = (uint16_t)DEF_RT_LF3_MS;
     p->rt_tn3_ms = (uint16_t)DEF_RT_TN3_MS;
     p->rt_lf4_ms = (uint16_t)DEF_RT_LF4_MS;
+    p->rt_cross_ms = (uint16_t)DEF_RT_CROSS_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
     p->leg_down_deg = (uint8_t)DEF_LEG_DOWN_DEG;

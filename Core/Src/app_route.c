@@ -75,6 +75,94 @@ typedef struct {
 
 static route_servo_evt_t s_srvq[ROUTE_SRVQ_MAX];
 
+/* ---- 循线段里的"地形自动穿越"状态 ----
+   见 bsp_config.h 里 CAR_TERRAIN_* 的说明。简单说：
+   循线时如果探头全白超过 40ms，就认为压上了地形（石块/草地/减速带盖住了线），
+   这一段改成"两轮同速直行"，等重新压到线再恢复循线。
+   ★ 实测本赛道的地形线中断很短，这条兜底正常不会触发；
+     但万一遇到更长的无线段，它能把车从"丢线打转"里救回来。 */
+static uint8_t  s_terrain  = 0u;    /* 1 = 正在盲走穿地形 */
+static uint16_t s_terr_in  = 0u;    /* 进入判据：连续全白的毫秒数 */
+static uint16_t s_terr_run = 0u;    /* 盲走已经持续多少毫秒 */
+static uint16_t s_terr_out = 0u;    /* 退出判据：盲走中连续看到线的毫秒数 */
+
+/* route_tick() 的实现在本文件后半部分（10ms 小主循环那一段），
+   而 route_lf_tick() 要用它，所以先声明一下。
+   ★ 少了这一行 armcc 会按 C89 的隐式声明规则把它当成"返回 int、参数不定"，
+     然后在真正的定义处报 "declaration is incompatible" —— 很难一眼看出原因 */
+static void route_tick(uint8_t use_car);
+
+/** 每段循线开始时清一次地形状态 */
+static void route_lf_reset(void)
+{
+    s_terrain  = 0u;
+    s_terr_in  = 0u;
+    s_terr_run = 0u;
+    s_terr_out = 0u;
+}
+
+/**
+  * @brief  循线一拍（自带地形穿越）
+  * @note   ★ 所有循线原语都走这个函数，而不是直接调 route_tick()。
+  *         它比 route_tick() 多做两件事：
+  *           1) 判断"是不是压上地形了"（全白超时）→ 是就切到盲走
+  *           2) 盲走中判断"是不是穿出来了"（重新看到线）→ 是就切回循线
+  */
+static void route_lf_tick(void)
+{
+    const APP_CarStatus_t *st;
+
+    /* 盲走时 use_car = 0：绝不让循迹环参与 ——
+       它看到全白会走丢线逻辑（朝一边猛转），那正是要避免的 */
+    route_tick((s_terrain == 0u) ? 1u : 0u);
+    st = APP_Car_GetStatus();
+
+    if (s_terrain == 0u) {
+        /* ---- 正常循线：盯着"线是不是被盖住了" ---- */
+        if (st->mask == 0u) {
+            if (s_terr_in < 0xFFFFu) {
+                s_terr_in = (uint16_t)(s_terr_in + CTRL_PERIOD_MS);
+            }
+            if (s_terr_in >= CAR_TERRAIN_ENTER_MS) {
+                s_terrain  = 1u;        /* 切盲走 */
+                s_terr_run = 0u;
+                s_terr_out = 0u;
+            }
+        } else {
+            s_terr_in = 0u;
+        }
+    } else {
+        /* ---- 盲走中：盯着"是不是重新压到线了" ---- */
+        if (s_terr_run < 0xFFFFu) {
+            s_terr_run = (uint16_t)(s_terr_run + CTRL_PERIOD_MS);
+        }
+
+        if (st->mask != 0u) {
+            if (s_terr_out < 0xFFFFu) {
+                s_terr_out = (uint16_t)(s_terr_out + CTRL_PERIOD_MS);
+            }
+            if (s_terr_out >= CAR_MARK_HOLD_MS) {
+                route_lf_reset();
+                APP_Car_ResetPid();     /* 清历史，避免恢复第一拍猛打方向 */
+            }
+        } else {
+            s_terr_out = 0u;
+        }
+
+        /* 盲走太久还看不到线 → 不是地形，是真丢了。
+           交回正常的丢线逻辑（转向搜索），总比一直直着冲出去好 */
+        if ((s_terrain != 0u) && (s_terr_run >= CAR_TERRAIN_MAX_MS)) {
+            route_lf_reset();
+        }
+    }
+
+    /* 盲走期间每拍都重新下发"两轮同速直行"：
+       电机方向脚可能被别的动作动过，重发一次最省心 */
+    if (s_terrain != 0u) {
+        BSP_Motor_SetSpeed(g_param.base_speed, g_param.base_speed);
+    }
+}
+
 #define ROUTE_DRAW_PERIOD_MS    200u    /* 屏幕上刷新路线的周期 */
 
 /* ==========================================================================
@@ -220,7 +308,22 @@ void Route_LineFollow(uint16_t ms)
     }
 
     APP_Car_Start();                    /* 启动循迹（内部自带起步斜坡） */
-    (void)route_wait(ms, 1u);           /* 等待期间由 APP_Car_Update 驱动电机 */
+    route_lf_reset();
+
+    /* ★ 不用 route_wait()，改用 route_lf_tick()：
+       它在等待期间除了维持系统，还会自动处理"线被地形盖住"的情况
+       （见 bsp_config.h 里 CAR_TERRAIN_* 的说明） */
+    {
+        uint32_t t0 = HAL_GetTick();
+
+        while ((uint32_t)(HAL_GetTick() - t0) < (uint32_t)ms) {
+            if (s_abort != 0u) {
+                break;
+            }
+            route_lf_tick();
+        }
+    }
+
     APP_Car_Stop();
 }
 
@@ -237,6 +340,7 @@ void Route_LineFollowUntilCross(uint8_t n)
     }
 
     APP_Car_Start();
+    route_lf_reset();
 
     /* 一直跑到"经过 n 根横线"为止。没有时间上限 —— 固定地图上
        横线就是路标，用路标终止比用时间可靠得多。
@@ -244,7 +348,7 @@ void Route_LineFollowUntilCross(uint8_t n)
     while ((seen < n) && (s_abort == 0u)) {
         const APP_CarStatus_t *st;
 
-        route_tick(1u);
+        route_lf_tick();                /* 自带地形穿越 */
 
         st = APP_Car_GetStatus();
 
@@ -260,6 +364,160 @@ void Route_LineFollowUntilCross(uint8_t n)
     }
 
     APP_Car_Stop();
+}
+
+/**
+  * @brief  ★★ 循线，直到"全丢黑线"发生第 n 次 ★★
+  * @note   实现很短，因为机制都在 app_car 里：它按"沿触发 + 重新武装"维护
+  *         s_lost_cnt（见 APP_Car_GetLostCount 的注释）。
+  *         这里只是"一边循线一边盯着计数够没够"。
+  */
+void Route_LineFollowUntilLostCount(uint8_t n, uint16_t timeout_ms)
+{
+    uint32_t t0;
+
+    route_begin_step("LINE->LOST", timeout_ms);
+
+    if ((s_abort != 0u) || (n == 0u)) {
+        return;
+    }
+
+    APP_Car_Start();
+    route_lf_reset();                   /* 清地形兜底状态 */
+    t0 = HAL_GetTick();
+
+    /* 一边循线一边等计数。★ 用 route_lf_tick() 而不是 route_tick()：
+       万一天形把线盖住得比较久，它会自动切成直行盲走，
+       不会让丢线逻辑把车带着原地打转 */
+    while ((APP_Car_GetLostCount() < (uint16_t)n) && (s_abort == 0u)) {
+        route_lf_tick();
+
+        if ((timeout_ms > 0u)
+            && ((uint32_t)(HAL_GetTick() - t0) >= (uint32_t)timeout_ms)) {
+            BSP_Buzzer_BeepAsync(400u);     /* 长音 = 一直没等到这个地形 */
+            break;
+        }
+    }
+
+    BSP_Buzzer_BeepAsync(120u);             /* 短音 = 到这个地形了 */
+
+    /* ★ 这里刻意【不停车】也不 Stop()：
+       等到的那一刻车正压在地形上，紧接着调用者就会用特殊方式开过去。
+       停一下会让车在地形边缘顿住，反而不好。
+       保留循迹运行态，下一个原语（比如 Route_DriveUntilLine）无缝接手。 */
+}
+
+void Route_LineFollowUntilMark(uint8_t on_mask, uint16_t timeout_ms)
+{
+    uint32_t t0;
+    uint16_t hold = 0u;
+
+    /* 把超时时间交给屏幕显示 —— 这一段的"剩余时间"就是"离放弃还差多久"，
+       跑的时候心里有数（正常情况它不会走到 0） */
+    route_begin_step("LINE->MARK", timeout_ms);
+
+    if ((s_abort != 0u) || (on_mask == 0u)) {
+        return;
+    }
+
+    APP_Car_Start();
+    route_lf_reset();
+    t0 = HAL_GetTick();
+
+    for (;;) {
+        const APP_CarStatus_t *st;
+
+        route_lf_tick();                /* 循迹由 APP_Car_Update 驱动，自带地形穿越 */
+
+        if (s_abort != 0u) {
+            break;
+        }
+
+        st = APP_Car_GetStatus();
+
+        /* ---- 路标匹配：要求的那几路必须【同时】压线，并保持一小会儿 ---- */
+        if ((st->mask & on_mask) == on_mask) {
+            hold = (uint16_t)(hold + CTRL_PERIOD_MS);
+
+            if (hold >= CAR_MARK_HOLD_MS) {
+                BSP_Buzzer_BeepAsync(120u);     /* 一声短音 = 看到路标了 */
+                break;
+            }
+        } else {
+            hold = 0u;                          /* 中途断开就重新计时 */
+        }
+
+        /* ---- 兜底超时：宁可带着偏差往下走，也不要卡死在这里 ---- */
+        if ((timeout_ms > 0u)
+            && ((uint32_t)(HAL_GetTick() - t0) >= (uint32_t)timeout_ms)) {
+            BSP_Buzzer_BeepAsync(400u);         /* 一声长音 = 没看到路标，超时了 */
+            break;
+        }
+    }
+
+    APP_Car_Stop();
+}
+
+void Route_DriveUntilLine(int16_t speed, uint8_t on_mask, uint16_t timeout_ms)
+{
+    int16_t  spd;
+    uint32_t t0;
+    uint16_t hold = 0u;
+
+    route_begin_step("CROSS TERRAIN", timeout_ms);
+
+    if (s_abort != 0u) {
+        return;
+    }
+
+    /* speed = 0 表示"用默认速度"，这样绝大多数情况调用者只要写 0 就行 */
+    spd = (speed != 0) ? speed : g_param.base_speed;
+
+    /* ★ 这里【不能】用 APP_Car_Update：
+       它一看到探头全白就会走丢线逻辑（朝一边猛转），
+       而那正是穿地形时必然出现的状态。
+       所以本段完全绕开循迹环，直接给两轮同速 —— 真正的"盲走"。 */
+    BSP_Motor_SetSpeed(spd, spd);
+    t0 = HAL_GetTick();
+
+    for (;;) {
+        const APP_CarStatus_t *st;
+
+        route_tick(0u);                 /* use_car = 0：不让 PID 抢方向盘 */
+
+        if (s_abort != 0u) {
+            break;
+        }
+
+        st = APP_Car_GetStatus();
+
+        /* 看到线了（或看到指定图案）。同样要求保持一小会儿，
+           防止车头刚探到线的那一瞬间误触发 */
+        /* ★ 判据用的是 CAR_LOST_REARM_MS（500ms）而不是 CAR_MARK_HOLD_MS（60ms）：
+           必须和"丢线计数器的重新武装时间"一致。
+           草地和减速带挨在一起、中间只有一小段线时，那一小段线虽然能让探头
+           看到 60ms 以上，却不够 500ms —— 于是判据不会在这里误认为"穿出来了"，
+           车会继续直行压过减速带，两块地形只算一次。
+           否则：车停在两块地形中间那一小段线上，脚本却以为已经过完了。 */
+        if ((on_mask == 0u) ? (st->mask != 0u) : ((st->mask & on_mask) == on_mask)) {
+            hold = (uint16_t)(hold + CTRL_PERIOD_MS);
+
+            if (hold >= CAR_LOST_REARM_MS) {
+                BSP_Buzzer_BeepAsync(120u);     /* 短音 = 穿出来了 */
+                break;
+            }
+        } else {
+            hold = 0u;
+        }
+
+        if ((timeout_ms > 0u)
+            && ((uint32_t)(HAL_GetTick() - t0) >= (uint32_t)timeout_ms)) {
+            BSP_Buzzer_BeepAsync(400u);         /* 长音 = 超时没找到线 */
+            break;
+        }
+    }
+
+    BSP_Motor_Stop();
 }
 
 void Route_Straight(uint16_t ms)
@@ -501,6 +759,10 @@ void APP_Route_Run(void)
         }
     }
 
+    /* ★ 丢线计数从 0 开始：路线上"第几次全丢线"就是"第几个地形"，
+       每一趟都要重新数，不然第二趟的判断就全错了 */
+    APP_Car_ResetLostCount();
+
     APP_Car_Stop();
     BSP_Motor_Stop();
 
@@ -508,46 +770,81 @@ void APP_Route_Run(void)
 
     /* ======================= ↓↓↓ 路线从这里开始 ↓↓↓ ======================= */
 
-    Route_LineFollow(g_param.rt_lf1_ms);    /* step1：循线（时长见菜单 ROUTE TIME）*/
-    Route_Beep2();                      /*        阶段标记：鸣两声 */
-
-    Route_TurnLeft(g_param.rt_tn1_ms);      /* step2：左转 */
-    Route_Beep2();
-
-    Route_LineFollow(g_param.rt_lf2_ms);    /* step3：循线 */
-    Route_Beep2();
-
-    Route_TurnLeft(g_param.rt_tn2_ms);      /* step4：左转 */
-    Route_Beep2();
-
-    Route_LineFollow(g_param.rt_lf3_ms);    /* step5：循线 */
-    Route_Beep2();
-
-    Route_TurnLeft(g_param.rt_tn3_ms);      /* step6：左转 */
-    Route_Beep2();
-
-    /* ---------------- step7~10：上三级台阶（一边循线一边摆支撑脚）----------------
+    /* ======================================================================
+     * ★★★ 本路线用"全丢黑线的次数"当地形编号 ★★★
+     * ----------------------------------------------------------------------
+     *   赛道上每一块地形（石块 / 草地+减速带 / 台阶）都是平铺上去的板子，
+     *   会把下面的黑线盖住 —— 每经过一块地形，就必然产生一次【全丢线】。
+     *   地形在固定赛道上的先后顺序是已知的，于是：
      *
-     * ★ 这里的关键是【时间重叠】：车要一边循线往前走、一边让支撑脚上下摆动。
-     *   脚本是顺序执行的，表达不了"同时做两件事"，所以用 Route_ServoAt()
-     *   把三次舵机动作【预约】出去，然后立刻开始循线 ——
-     *   循线的这 5 秒里，后台节拍会按预约的时间点把舵机动到位。
+     *       Route_LineFollowUntilLostCount(1u, ...) = 循线直到第 1 个地形
+     *       Route_LineFollowUntilLostCount(2u, ...) = 循线直到第 2 个地形
+     *       ...
+     *
+     *   等到了地形，就用"这个地形专用的方式"开过去，然后接着循线。
+     *   ★ 全程都在循迹状态，只是到了特定编号换一种跑法。
+     *   ★ 它和时间、电池电压无关：慢一点就晚一点到，编号永远对得上。
+     *
+     *   【跑第一趟时请确认计数】OLED 状态页第 6 行： "M00111100 L  0 N 1"
+     *     N 就是当前计数。要看两件事：
+     *       1) 每压上一块地形，N 是不是正好 +1
+     *       2) 草地和减速带是【两块挨着的地形】，中间那一小段线够不够
+     *          让计数器重新武装（CAR_LOST_REARM_MS = 500ms）——
+     *          够 → 会被数成 2 次，后面台阶的编号要跟着 +1
+     *          不够 → 只数 1 次，就是下面写的这样
+     *     对不上就改下面那几个数字，别改别的。
+     * ====================================================================== */
+
+    /* ------------------------- 地形 1：石块 ------------------------------ */
+    Route_LineFollowUntilLostCount(1u, g_param.rt_lf1_ms);
+    Route_DriveUntilLine(0, 0u, g_param.rt_cross_ms);   /* 盲走穿过：不看线、
+                                                           两轮同速直行，
+                                                           重新连续压到线才算出来 */
+    Route_Beep2();
+
+    Route_TurnLeft(g_param.rt_tn1_ms);                  /* 左转 */
+    Route_Beep2();
+
+    /* --------------------- 地形 2：草地 + 减速带 ------------------------- */
+    Route_LineFollowUntilLostCount(2u, g_param.rt_lf2_ms);
+    Route_DriveUntilLine(0, 0u, g_param.rt_cross_ms);
+    Route_Beep2();
+
+    Route_TurnLeft(g_param.rt_tn2_ms);                  /* 左转 */
+    Route_Beep2();
+
+    /* ------------------- 一段纯循线（到下一个路口）----------------------- */
+    /* 这一段没有地形，用"经过 1 根横线"来收尾 ——
+       比时间可靠，而且不需要预先量图案（八路全压就是横线）。
+       ★ 如果这里等不到横线（每次都听长音），说明线不够宽，
+         请用菜单 SENSOR VIEW 推过路口看一下掩码，再改判据。 */
+    Route_LineFollowUntilCross(1u);
+    Route_Beep2();
+
+    Route_TurnLeft(g_param.rt_tn3_ms);                  /* 左转 */
+    Route_Beep2();
+
+    /* ---------------- 地形 3：上台阶（换第三种跑法）--------------------
+     *
+     * 先循线到第 3 个地形（★ 如果草地和减速带被数成两次，这里就写 4u）
+     * 这一幕"一边走一边摆脚"是时间重叠的，所以用 Route_ServoAt() 预约三次
+     * 舵机动作，然后立刻开始盲走 —— 走的过程中后台节拍按时间点把舵机动到位。
      *
      *   时间轴（相对本段开始）：
-     *       t = 0.0s   支撑脚放下到 180°   （约 0.9 秒走完）
-     *       t = 2.0s   支撑脚升起到   0°   （约 0.9 秒走完）
-     *       t = 3.0s   支撑脚放下到 180°   （按你说的最后再放下 2 秒）
-     *       t = 5.0s   循线结束，本段收尾
+     *       t = 0.0s   支撑脚放下到 LEGDN（约 0.9 秒走完）
+     *       t = 2.0s   支撑脚升起到 LEGUP（约 0.9 秒走完）
+     *       t = 3.0s   支撑脚放下到 LEGDN
      *
-     *   ★ 角度值用参数 LEGDN / LEGUP（也就是菜单里标定过的"放下位/收起位"），
-     *     而不是写死 180 / 0 —— 这样以后标定改了角度，这里自动跟着改。
-     *   ★ 想让摆动更"甩"一点（不等它走完就折返），把后面的时间点往前提
-     *     （比如 2000 → 1200）：机构没走完就被叫回去，看起来就是快速抖动。 */
+     *   ★ 角度用参数 LEGDN / LEGUP（菜单里标定过的"放下位/收起位"），
+     *     不写死 180/0 —— 以后标定改了角度，这里自动跟着改。
+     *   ★ 想让摆动更"甩"（不等走完就折返），把时间点往前提（2000 → 1200）。 */
+    Route_LineFollowUntilLostCount(3u, g_param.rt_lf4_ms);
+
     Route_ServoAt((uint8_t)g_param.leg_down_deg,    0u);    /* t=0    放下 */
     Route_ServoAt((uint8_t)g_param.leg_up_deg,   2000u);    /* t=2s   升起 */
     Route_ServoAt((uint8_t)g_param.leg_down_deg, 3000u);    /* t=3s   再放下 */
 
-    Route_LineFollow(g_param.rt_lf4_ms);    /* ★ 这 5 秒一边循线一边摆脚 */
+    Route_DriveUntilLine(0, 0u, g_param.rt_cross_ms);       /* 盲走爬上台阶 */
     Route_Beep2();
 
     /* 路线结束 */

@@ -99,6 +99,9 @@ static APP_CarStatus_t s_st;                /* 对外的状态快照 */
 
 static int8_t   s_last_dir    = 1;          /* 最后一次看到线时误差的正负（1 = 线在右侧） */
 static uint16_t s_lost_acc    = 0u;         /* 全白累计毫秒 */
+static uint16_t s_lost_cnt    = 0u;         /* ★ "全丢黑线"的次数（丢线事件计数） */
+static uint8_t  s_lost_armed  = 1u;         /* 1 = 允许计数；看到线够久之后重新置 1 */
+static uint16_t s_seen_acc    = 0u;         /* 重新武装用：连续"看到线"的毫秒数 */
 static uint16_t s_cross_acc   = 0u;         /* 全黑累计毫秒 */
 static uint16_t s_stall_acc   = 0u;         /* 堵转累计毫秒 */
 static uint16_t s_alert_acc   = 0u;         /* 报警蜂鸣节流 */
@@ -301,6 +304,26 @@ const APP_CarStatus_t *APP_Car_GetStatus(void)
     return &s_st;
 }
 
+uint16_t APP_Car_GetLostCount(void)
+{
+    return s_lost_cnt;
+}
+
+void APP_Car_ResetLostCount(void)
+{
+    s_lost_cnt   = 0u;
+    s_lost_armed = 1u;      /* 重新武装，下一段地形可以正常计数 */
+    s_seen_acc   = 0u;
+}
+
+void APP_Car_ResetPid(void)
+{
+    /* 清掉积分与微分历史。给路线模块用：盲走穿过地形之后重新压上线的那一刻，
+       PID 里还留着"进地形之前"的历史，不清理的话恢复循线的第一拍会猛打一下方向 */
+    BSP_PID_Reset(&s_pid_turn);
+    s_pid_stale = 0u;
+}
+
 const char *APP_Car_StateName(uint8_t state)
 {
     switch (state) {
@@ -441,6 +464,42 @@ void APP_Car_Update(void)
     }
     s_st.lost    = (s_lost_acc >= CAR_LOST_DEBOUNCE_MS) ? 1u : 0u;
     s_st.lost_ms = s_lost_acc;
+
+    /* ---- ③.5 ★ 丢线事件计数："全丢黑线"发生了几次 ----
+     *
+     * 这就是"地形编号"的来源：每块地形（石块/草地/减速带/台阶）都会盖住黑线，
+     * 各产生一次全丢线事件，它们在固定赛道上的先后顺序是已知的，
+     * 所以"第几次丢线"就等于"到了第几个地形"。
+     *
+     * 用【沿触发】而不是电平计数：
+     *   只在"由有线变成全丢"的那一瞬间 +1，否则一次地形会被数成成百上千次。
+     *
+     * 用【重新武装】避免相邻地形被数成两次：
+     *   计数之后要先"连续看到线达到 CAR_LOST_REARM_MS"才允许下一次计数。
+     *   草地和减速带挨在一起、中间只有一小段线时，那一段线不够长，
+     *   于是两块地形只算一次 —— 对得上"第几个地形"这个语义。 */
+    if ((s_st.lost != 0u) && (all_white != 0u)) {
+        /* 丢线中：看到线的累计时间清零 */
+        s_seen_acc = 0u;
+
+        if (s_lost_armed != 0u) {
+            s_lost_armed = 0u;              /* 先缴械，避免同一段地形重复计数 */
+            if (s_lost_cnt < 0xFFFFu) {
+                s_lost_cnt++;
+            }
+        }
+    } else if (s_lost_armed == 0u) {
+        /* 已经不丢线了：攒够"连续看到线"的时间就把计数器重新武装 */
+        if (s_seen_acc < 0xFFFFu) {
+            s_seen_acc = (uint16_t)(s_seen_acc + dt_ms);
+        }
+        if (s_seen_acc >= CAR_LOST_REARM_MS) {
+            s_lost_armed = 1u;
+            s_seen_acc   = 0u;
+        }
+    }
+
+    s_st.lost_cnt = s_lost_cnt;
 
     /* ---- ⑤ 转向环：连续 PID ----
        丢线时不用 PID，改成"按最后看到线的方向固定猛打"（见下面），
