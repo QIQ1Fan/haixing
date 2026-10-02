@@ -29,17 +29,10 @@ haixing\bsp_test.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V
 haixing\bsp_test.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.7/Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h
 haixing\bsp_test.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.7/Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h
 haixing\bsp_test.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.7/Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h
-haixing\bsp_test.o: ../Core/Inc/bsp_gpio.h
 haixing\bsp_test.o: ../Core/Inc/bsp_motor.h
-haixing\bsp_test.o: ../Core/Inc/bsp_servo.h
-haixing\bsp_test.o: ../Core/Inc/bsp_encoder.h
 haixing\bsp_test.o: ../Core/Inc/bsp_track.h
-haixing\bsp_test.o: ../Core/Inc/bsp_key.h
 haixing\bsp_test.o: ../Core/Inc/bsp_buzzer.h
-haixing\bsp_test.o: ../Core/Inc/bsp_oled.h
 haixing\bsp_test.o: ../Core/Inc/bsp_uart.h
 haixing\bsp_test.o: ../Core/Inc/app_param.h
-haixing\bsp_test.o: ../Core/Inc/app_car.h
-haixing\bsp_test.o: ../Core/Inc/app_leg.h
 haixing\bsp_test.o: ../Core/Inc/app_menu.h
 haixing\bsp_test.o: ../Core/Inc/app_route.h

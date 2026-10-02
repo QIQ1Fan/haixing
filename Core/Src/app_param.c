@@ -155,15 +155,24 @@ APP_Param_t g_param;
  *   这两个值必须实车标定：
  *     · 如果某一端听到舵机"嗡嗡"顶死不走，把那一端往回收 5~10 度
  *     · 菜单 TUNE PARAMS 里改 LEGUP / LEGDN 能立刻看到脚动，调完按 S 存 Flash */
-/* ★★ 路线各阶段的默认时长（毫秒）★★
- *   就是"发车前写在脚本里"的那一份，现在菜单里随时能改，改完立刻生效 ——
- *   下一次按 K1 跑路线就用新值 */
-#define DEF_RT_LF1_MS       10500       /* step1 循线 10.5s */
+/* ★★ 路线里还剩的两类时间（毫秒）★★
+ *   循线段已经不用时间了（改成等"循迹结果事件"，和电池电压无关），
+ *   只剩下"盲走"和"转弯"这两种必须用时间的地方。
+ *   菜单 ROUTE TIME 页里随时能改，改完立刻生效 —— 下次按 K1 就用新值 */
+#define DEF_RT_BLD1_MS      7500        /* step1 盲走 7.5s */
+/* 第 1 根横线之后、左转之前再循迹的时长。
+ * 车架大：压过横线的那一刻车身还没摆正，直接原地转会转歪。
+ * 再循迹 1.5 秒，车刚好走到"线在正中间"的位置，这时候转最准 */
+#define DEF_RT_POST_MS      1500
 #define DEF_RT_TN1_MS       900         /* step2 左转 ★ 待标定 */
-#define DEF_RT_LF2_MS       17000       /* step3 循线 17s */
-#define DEF_RT_TN2_MS       900         /* step4 左转 ★ 待标定 */
-#define DEF_RT_LF3_MS       15000       /* step5 循线 15s */
-#define DEF_RT_TN3_MS       900         /* step6 左转 ★ 待标定 */
+#define DEF_RT_BLD2_MS      5500        /* step3 盲走 5.5s */
+#define DEF_RT_TN2_MS       900         /* step4 第 5 根横线后左转 ★ 待标定 */
+#define DEF_RT_TN3_MS       900         /* step4 第 6 根横线后左转 ★ 待标定 */
+#define DEF_RT_TN4_MS       900         /* step4 左三压线后左转 ★ 待标定 */
+/* 检测到"最左三路全压线"之后、转弯之前，直走的时长。
+ * 和 POST_ms 是一对：POST_ms 是"过横线后再循迹一段"，
+ * STR_ms 是"过左三之后直接直走一段"（这时候不用循迹，直着走就行）*/
+#define DEF_RT_STR_MS       1000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
@@ -215,12 +224,14 @@ const APP_ParamItem_t g_param_table[] = {
     /* ------------------------ 路线各阶段时长 ---------------------------- */
     /* 循线段步长 100ms（一段十几秒，长按 = 500/次）
        转弯段步长  50ms（一段不到 1 秒，50ms 大约对应 5 度，标定时要细） */
-    { "LF1_ms",   offsetof(APP_Param_t, rt_lf1_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
+    { "BLD1_ms",  offsetof(APP_Param_t, rt_bld1_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
+    { "POST_ms",  offsetof(APP_Param_t, rt_post_ms),   PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
     { "TN1_ms",   offsetof(APP_Param_t, rt_tn1_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
-    { "LF2_ms",   offsetof(APP_Param_t, rt_lf2_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
+    { "BLD2_ms",  offsetof(APP_Param_t, rt_bld2_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
     { "TN2_ms",   offsetof(APP_Param_t, rt_tn2_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
-    { "LF3_ms",   offsetof(APP_Param_t, rt_lf3_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 60000.0f },
     { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "TN4_ms",   offsetof(APP_Param_t, rt_tn4_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "STR_ms",   offsetof(APP_Param_t, rt_str_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
@@ -324,12 +335,14 @@ static void param_fill_default(APP_Param_t *p)
 
     p->stall_ms = (uint16_t)DEF_STALL_MS;
 
-    p->rt_lf1_ms = (uint16_t)DEF_RT_LF1_MS;
-    p->rt_tn1_ms = (uint16_t)DEF_RT_TN1_MS;
-    p->rt_lf2_ms = (uint16_t)DEF_RT_LF2_MS;
-    p->rt_tn2_ms = (uint16_t)DEF_RT_TN2_MS;
-    p->rt_lf3_ms = (uint16_t)DEF_RT_LF3_MS;
-    p->rt_tn3_ms = (uint16_t)DEF_RT_TN3_MS;
+    p->rt_bld1_ms = (uint16_t)DEF_RT_BLD1_MS;
+    p->rt_post_ms = (uint16_t)DEF_RT_POST_MS;
+    p->rt_tn1_ms  = (uint16_t)DEF_RT_TN1_MS;
+    p->rt_bld2_ms = (uint16_t)DEF_RT_BLD2_MS;
+    p->rt_tn2_ms  = (uint16_t)DEF_RT_TN2_MS;
+    p->rt_tn3_ms  = (uint16_t)DEF_RT_TN3_MS;
+    p->rt_tn4_ms  = (uint16_t)DEF_RT_TN4_MS;
+    p->rt_str_ms  = (uint16_t)DEF_RT_STR_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
     p->leg_down_deg = (uint8_t)DEF_LEG_DOWN_DEG;

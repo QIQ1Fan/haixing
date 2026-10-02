@@ -91,6 +91,57 @@ void Route_LineFollow(uint16_t ms);
   */
 void Route_LineFollowUntilCross(uint8_t n);
 
+/* ==========================================================================
+ * ★★ 循迹"结果事件"驱动路段 ★★
+ * --------------------------------------------------------------------------
+ *   用"某种循迹结果出现了几次"来切分路段，不用时间、也不受电池电压影响。
+ *   三个可选事件（图案掩码在 bsp_config.h 的 CAR_EVT_* 里，可按实测改）：
+ *
+ *       LEFT3  : 最左三路全压线 —— 线跑到车头左边去了
+ *       RIGHT3 : 最右三路全压线
+ *       BLACK  : 全黑（横线 / 十字 / 停止线）
+ *
+ *   计数是【累计】的，从 APP_Route_Run() 开头的零开始，
+ *   所以脚本里写的是"绝对第几次"：
+ *       Route_LineFollowUntilBlack(1u);   // 循线到第 1 根横线
+ *       Route_LineFollowUntilBlack(2u);   // 再循线到第 2 根横线
+ * ========================================================================== */
+
+/**
+  * @brief  ★ 循线，直到某个"结果事件"累计发生到第 n 次
+  * @param  evt 要等的事件：APP_CAR_EVT_LEFT3 / RIGHT3 / BLACK
+  * @param  n   等到累计第几次（1 = 第一次）
+  * @note   ★ 没有时间参数 —— 走到就是走到，没走到就一直在线上找。
+  *         安全网是内部固定的 ROUTE_EVENT_TIMEOUT_MS（60 秒）：
+  *         这么久还没等到就鸣一声长音、继续往下走，不会永远卡住。
+  *         任何时候长按 K2 都能中止整条路线。
+  * @note   等到之后【不停车】：下一个动作紧接着开始。
+  */
+void Route_LineFollowUntilEvent(uint8_t evt, uint16_t n);
+
+/**
+  * @brief  ★ 循线，直到某个事件【下一次】发生（不关心这是第几次）
+  * @param  evt APP_CAR_EVT_LEFT3 / RIGHT3 / BLACK
+  * @note   和 Route_LineFollowUntilEvent() 的区别：
+  *           那个写死"绝对第几次"（适合横线：第 4 根、第 5 根这种已知编号）
+  *           这个只等"下一次出现"（适合随机出现的图案：
+  *           比如"左三压线"在一趟里可能已经出现过好几次，
+  *           写死编号就得先去数清楚，很容易对不上）
+  */
+void Route_LineFollowUntilNextEvent(uint8_t evt);
+
+/** @brief 循线直到"最左三路全压"【下一次】出现 */
+void Route_LineFollowUntilNextLeft3(void);
+
+/** @brief 循线直到"最左三路全压"第 n 次 */
+void Route_LineFollowUntilLeft3(uint16_t n);
+
+/** @brief 循线直到"最右三路全压"第 n 次 */
+void Route_LineFollowUntilRight3(uint16_t n);
+
+/** @brief 循线直到"全黑（横线/十字）"第 n 次 */
+void Route_LineFollowUntilBlack(uint16_t n);
+
 /** @brief 两轮同速直行 ms 毫秒（速度 = BASESPD） */
 void Route_Straight(uint16_t ms);
 

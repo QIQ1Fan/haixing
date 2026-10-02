@@ -99,6 +99,69 @@ static APP_CarStatus_t s_st;                /* 对外的状态快照 */
 
 static int8_t   s_last_dir    = 1;          /* 最后一次看到线时误差的正负（1 = 线在右侧） */
 static uint16_t s_lost_acc    = 0u;         /* 全白累计毫秒 */
+
+/* ---- ★ 循迹"结果事件"计数器（各一个）----
+ * 每个通道三个量：armed = 允许计数，hold = 图案已连续保持多少毫秒，
+ * away = 图案已连续消失多少毫秒（重新武装用）。规则见头文件里的说明。 */
+typedef struct {
+    uint16_t cnt;       /* 累计次数 */
+    uint16_t hold;      /* 图案连续保持的毫秒数 */
+    uint16_t away;      /* 图案连续消失的毫秒数（重新武装计时）*/
+    uint8_t  armed;     /* 1 = 允许计下一次 */
+} car_evt_t;
+
+static car_evt_t s_evt[APP_CAR_EVT_NUM];
+
+/* 三个通道对应的图案掩码（bsp_config.h 里可改） */
+static const uint8_t s_evt_mask[APP_CAR_EVT_NUM] = {
+    CAR_EVT_MASK_LEFT3,     /* APP_CAR_EVT_LEFT3 */
+    CAR_EVT_MASK_RIGHT3,    /* APP_CAR_EVT_RIGHT3 */
+    CAR_EVT_MASK_BLACK      /* APP_CAR_EVT_BLACK */
+};
+
+/**
+  * @brief  推进一个事件通道
+  * @param  mask    当前压线掩码
+  * @param  dt_ms   本拍经过的毫秒
+  * @note   算法就是"保持 + 重新武装"，两个阈值都在 bsp_config.h：
+  *           图案连续保持 >= CAR_EVT_HOLD_MS  → 计数 +1（并要求已武装）
+  *           计过之后图案连续消失 >= CAR_EVT_REARM_MS → 重新武装
+  */
+static void car_evt_update(uint8_t ch, uint8_t mask, uint16_t dt_ms)
+{
+    car_evt_t *e = &s_evt[ch];
+    uint8_t present = ((mask & s_evt_mask[ch]) == s_evt_mask[ch]) ? 1u : 0u;
+
+    if (present != 0u) {
+        e->away = 0u;
+
+        if (e->hold < 0xFFFFu) {
+            e->hold = (uint16_t)(e->hold + dt_ms);
+        }
+
+        /* 达到保持时间、而且"已武装" → 计一次，并立刻缴械，
+           避免同一根横线被反复计数 */
+        if ((e->armed != 0u) && (e->hold >= CAR_EVT_HOLD_MS)) {
+            e->armed = 0u;
+            if (e->cnt < 0xFFFFu) {
+                e->cnt++;
+            }
+        }
+    } else {
+        e->hold = 0u;
+
+        /* 图案消失够久 → 重新武装，准备数下一个 */
+        if (e->armed == 0u) {
+            if (e->away < 0xFFFFu) {
+                e->away = (uint16_t)(e->away + dt_ms);
+            }
+            if (e->away >= CAR_EVT_REARM_MS) {
+                e->armed = 1u;
+                e->away  = 0u;
+            }
+        }
+    }
+}
 static uint16_t s_cross_acc   = 0u;         /* 全黑累计毫秒 */
 static uint16_t s_stall_acc   = 0u;         /* 堵转累计毫秒 */
 static uint16_t s_alert_acc   = 0u;         /* 报警蜂鸣节流 */
@@ -301,6 +364,30 @@ const APP_CarStatus_t *APP_Car_GetStatus(void)
     return &s_st;
 }
 
+uint16_t APP_Car_GetEventCount(uint8_t evt)
+{
+    if (evt >= (uint8_t)APP_CAR_EVT_NUM) {
+        return 0u;
+    }
+    return s_evt[evt].cnt;
+}
+
+void APP_Car_ResetEventCounts(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < (uint8_t)APP_CAR_EVT_NUM; i++) {
+        s_evt[i].cnt   = 0u;
+        s_evt[i].hold  = 0u;
+        s_evt[i].away  = 0u;
+        s_evt[i].armed = 1u;        /* 清零后立刻武装，第一个事件就能数到 */
+    }
+
+    s_st.cnt_left3  = 0u;
+    s_st.cnt_right3 = 0u;
+    s_st.cnt_black  = 0u;
+}
+
 const char *APP_Car_StateName(uint8_t state)
 {
     switch (state) {
@@ -358,6 +445,25 @@ void APP_Car_Update(void)
 
     /* 遥测每拍都刷新（待机时屏幕上也有转速看） */
     car_refresh_telemetry();
+
+    /* ---- ★ 循迹结果事件计数：每拍都推进，待机时也一样 ----
+     * 放在状态判断【之前】是故意的：这样你可以把车放在赛道上【推着走一遍】，
+     * 在菜单状态页上看着三个计数对不对 —— 不用真的开车、不用接线调试。
+     * 标定阶段这一步非常省事。
+     * ★ 注意：路线里的"盲走"段（Route_Straight）不会调到这里，
+     *   所以盲走期间经过的横线不会被计数 —— 这正是我们要的：
+     *   那一段是"闭着眼睛冲过去"，不该产生任何事件。 */
+    {
+        uint8_t mk = BSP_Track_GetMask();
+
+        car_evt_update((uint8_t)APP_CAR_EVT_LEFT3,  mk, dt_ms);
+        car_evt_update((uint8_t)APP_CAR_EVT_RIGHT3, mk, dt_ms);
+        car_evt_update((uint8_t)APP_CAR_EVT_BLACK,  mk, dt_ms);
+
+        s_st.cnt_left3  = s_evt[APP_CAR_EVT_LEFT3].cnt;
+        s_st.cnt_right3 = s_evt[APP_CAR_EVT_RIGHT3].cnt;
+        s_st.cnt_black  = s_evt[APP_CAR_EVT_BLACK].cnt;
+    }
 
     /* ---- 非行驶状态：只维持报警提示音，不碰电机 ---- */
     if (s_st.state == APP_CAR_IDLE) {

@@ -233,6 +233,104 @@ void Route_LineFollowUntilCross(uint8_t n)
     APP_Car_Stop();
 }
 
+/* 等事件的安全网：这么久还没等到就放弃、继续往下走（毫秒）。
+   60 秒足够跑完最长的直道；真卡住时也不会让车一直往前冲 */
+#define ROUTE_EVENT_TIMEOUT_MS  60000u
+
+/**
+  * @brief  循线的公共等待：一直循线，直到某个事件的计数【超过 base】
+  * @param  base 进入时的计数（等"绝对第 n 次"就传 n-1；等"下一次"就传当前值）
+  * @retval 1 = 等到了；0 = 超时或被中止
+  * @note   两种用法都由它实现，见下面两个对外函数。
+  */
+static uint8_t route_wait_event_over(uint8_t evt, uint16_t base)
+{
+    uint32_t t0 = HAL_GetTick();
+    uint16_t shown = base;
+
+    /* 一边循线一边等计数。★ 期间完全交给循迹环驱动电机，
+       所以车一直在线上纠偏，不是"闭着眼睛等"。 */
+    while ((APP_Car_GetEventCount(evt) <= base) && (s_abort == 0u)) {
+        route_tick(1u);
+
+        /* 每跨过一次计数就"嘀"一声：跑的时候凭声音就知道过了几根横线，
+           不用盯着屏幕 */
+        if (APP_Car_GetEventCount(evt) != shown) {
+            shown = APP_Car_GetEventCount(evt);
+            BSP_Buzzer_BeepAsync(60u);
+        }
+
+        if ((uint32_t)(HAL_GetTick() - t0) >= ROUTE_EVENT_TIMEOUT_MS) {
+            BSP_Buzzer_BeepAsync(400u);     /* 长音 = 一直没等到，放弃了 */
+            return 0u;
+        }
+    }
+
+    if (s_abort != 0u) {
+        return 0u;
+    }
+
+    BSP_Buzzer_BeepAsync(120u);             /* 短音 = 等到了 */
+    return 1u;
+}
+
+void Route_LineFollowUntilEvent(uint8_t evt, uint16_t n)
+{
+    route_begin_step("LINE->EVENT", 0u);
+
+    if ((s_abort != 0u) || (n == 0u)) {
+        return;
+    }
+
+    APP_Car_Start();
+
+    /* "等到第 n 次" = "等到计数超过 n-1" */
+    (void)route_wait_event_over(evt, (uint16_t)(n - 1u));
+
+    /* ★ 这里【不停车】：等到的那一刻车还在线上正常跑，
+       下一个动作（左转 / 盲走）紧接着开始，停一下反而会顿一下 */
+}
+
+void Route_LineFollowUntilNextEvent(uint8_t evt)
+{
+    uint16_t base;
+
+    route_begin_step("LINE->NEXT", 0u);
+
+    if (s_abort != 0u) {
+        return;
+    }
+
+    /* ★ 记下"现在数到几了"，然后等它变大 —— 也就是等【下一次】该图案出现。
+       为什么不写死"第几次"：同一个图案在一趟路线里可能已经出现过好几次
+       （比如线偏到左边也会触发"左三压线"），写死编号就得先去数清楚，
+       很容易对不上；"下一次"永远是对的。 */
+    base = APP_Car_GetEventCount(evt);
+
+    APP_Car_Start();
+    (void)route_wait_event_over(evt, base);
+}
+
+void Route_LineFollowUntilNextLeft3(void)
+{
+    Route_LineFollowUntilNextEvent((uint8_t)APP_CAR_EVT_LEFT3);
+}
+
+void Route_LineFollowUntilLeft3(uint16_t n)
+{
+    Route_LineFollowUntilEvent((uint8_t)APP_CAR_EVT_LEFT3, n);
+}
+
+void Route_LineFollowUntilRight3(uint16_t n)
+{
+    Route_LineFollowUntilEvent((uint8_t)APP_CAR_EVT_RIGHT3, n);
+}
+
+void Route_LineFollowUntilBlack(uint16_t n)
+{
+    Route_LineFollowUntilEvent((uint8_t)APP_CAR_EVT_BLACK, n);
+}
+
 void Route_Straight(uint16_t ms)
 {
     int16_t spd = g_param.base_speed;
@@ -411,29 +509,30 @@ void APP_Route_Abort(void)
  * ★★★  路 线 脚 本 —— 改路线只改这一个函数  ★★★
  * --------------------------------------------------------------------------
  *   每一行是一个动作，按从上到下的顺序执行。
- *   参数单位都是【毫秒】，舵机那一个是【角度 0~180】。
  *
- *   写脚本的思路（固定地图）：
- *     1) 先按地图把路线切成几段：每段要么"循线走多远"，要么"直行/转向多久"
- *     2) 有横线（路口、停止线）的地方优先用 Route_LineFollowUntilCross(n)，
- *        它比"循线 x 毫秒"可靠 —— 不随电池电压、地面摩擦变化
- *     3) 原地转向的角度靠时间标定：跑一次，量出实际转了多少度，
- *        再按比例改毫秒数（比如 600ms 转了 70°，那 90° 就写 770ms）
- *     4) 每段之间可以插 Route_Beep()，跑的时候听声音就知道走到哪一步了
+ *   ★★ 本路线的思路：用"循迹结果出现了几次"来推进，不用死时间 ★★
+ *
+ *   三种"循迹结果"各有一个计数器（在 app_car 里，掩码见 bsp_config.h）：
+ *       LEFT3   最左三路全压线 —— 线跑到车头左边去了
+ *       RIGHT3  最右三路全压线
+ *       BLACK   全黑           —— 横线 / 十字 / 停止线
+ *
+ *   计数是【累计】的，从本函数开头清零之后开始数，
+ *   所以脚本里写的是"绝对第几次"：第 1 根横线、第 2 根横线……
+ *
+ *   只有两种动作用到时间（它们在菜单 ROUTE TIME 页里可调）：
+ *       BLD*_ms  盲走：闭着眼睛直冲，用来过地形
+ *       TN*_ms   转弯：原地左转，角度靠时间标定
+ *
+ *   ★ 好处：循线段不再随电池电压漂移 —— 慢一点就晚一点到，
+ *     "第几次看到横线"永远对得上；标定一次就不用再管电量。
  * --------------------------------------------------------------------------
- *   当前路线（时长值都在菜单 ROUTE TIME 里调）：
+ *   跑的时候凭声音判断走到哪了：
+ *       每过一段        鸣两声（阶段标记）
+ *       每数到一个事件  嘀一声
+ *       等到目标事件    嘀一声（短）
+ *       一直等不到      嘀——（长，60 秒安全网）
  * ========================================================================== */
-/* --------------------------------------------------------------------------
- * 路线各段的时长已经改成【参数】了，不再写死在这里。
- * 改时长有两个入口，都不用重新编译：
- *   · 菜单 → ROUTE TIME      （一屏看全六段，专为调试路线用）
- *   · 菜单 → TUNE PARAMS     （LF1_ms / TN1_ms / ... 同名参数）
- * 参数名与步骤的对应：
- *   LF1_ms = step1 循线    TN1_ms = step2 转弯
- *   LF2_ms = step3 循线    TN2_ms = step4 转弯
- *   LF3_ms = step5 循线    TN3_ms = step6 转弯
- * 转弯时长仍需实车标定：跑一次量出实际转了多少度，按比例改。
- * -------------------------------------------------------------------------- */
 
 void APP_Route_Run(void)
 {
@@ -444,6 +543,12 @@ void APP_Route_Run(void)
     s_pump_tick = HAL_GetTick();
     s_draw_tick = HAL_GetTick();
 
+    /* ★ 三个循迹结果计数器从 0 开始：
+       脚本里写的是"第 1 根横线、第 2 根横线"，每一趟都必须重新数，
+       否则第二趟会把上一趟的数带进来，判断全乱。
+       计数器在待机时也在更新（方便推着车标定），所以这一步不能省。 */
+    APP_Car_ResetEventCounts();
+
     APP_Car_Stop();
     BSP_Motor_Stop();
 
@@ -451,22 +556,65 @@ void APP_Route_Run(void)
 
     /* ======================= ↓↓↓ 路线从这里开始 ↓↓↓ ======================= */
 
-    Route_LineFollow(g_param.rt_lf1_ms);    /* step1：循线（时长见菜单 ROUTE TIME）*/
-    Route_Beep2();                      /*        阶段标记：鸣两声 */
-
-    Route_TurnLeft(g_param.rt_tn1_ms);      /* step2：左转 */
+    /* ===================== step1：起步 → 盲走 ============================
+     * 发车后正常循迹，等"最左三路全压线"出现第 1 次 ——
+     * 线跑到车头左边去了，说明到了该盲走的位置。
+     * 然后闭着眼睛直冲 BLD1_ms 过掉这一段。 */
+    Route_LineFollowUntilLeft3(1u);
+    Route_Straight(g_param.rt_bld1_ms);     /* ★ 盲走 7.5 秒（菜单 ROUTE TIME 里调）*/
     Route_Beep2();
 
-    Route_LineFollow(g_param.rt_lf2_ms);    /* step3：循线 */
+    /* ============ step2：第 1 根横线 → 再循迹一段 → 左转 ================
+     * 回到循迹模式，一直循到第 1 根横线（八路全压）。
+     *
+     * ★ 压到横线的那一刻【不能马上转】：车架大，这时候车身压在横线上、
+     *   还没摆正，原地转会转歪。
+     *   所以再正常循迹 POST_ms（默认 1.5 秒）——
+     *   这段时间循迹环会把车纠到"线在探头正中间"，也就是转弯的最佳起点，
+     *   再原地左转，落点才准。
+     *
+     * ★ 想让车走得更靠前一点再转，就把 POST_ms 调大（菜单 ROUTE TIME 页）。
+     *   后面 step4 那次左转如果也有同样问题，照着加一行就行。 */
+    Route_LineFollowUntilBlack(1u);
+    Route_LineFollow(g_param.rt_post_ms);   /* ★ 过线后再循迹 1.5 秒，走到线中心 */
+    Route_TurnLeft(g_param.rt_tn1_ms);
     Route_Beep2();
 
-    Route_TurnLeft(g_param.rt_tn2_ms);      /* step4：左转 */
+    /* ===================== step3：第 4 根横线 → 盲走 =====================
+     * ★ 注意这里等的是【第 4 根】：
+     *   中间第 2、3 根横线会正常循迹开过去、不做任何动作，
+     *   计数器照样在数，所以"等到第 4 根"就是"开过前面那两根之后"。
+     *   ★ 跑的时候听声音：每过一根横线会"嘀"一声，
+     *     听到第 4 声之后就该盲走了。 */
+    Route_LineFollowUntilBlack(4u);
+    Route_Straight(g_param.rt_bld2_ms);     /* ★ 盲走（默认 5.5 秒）*/
     Route_Beep2();
 
-    Route_LineFollow(g_param.rt_lf3_ms);    /* step5：循线 */
+    /* ============== step4：第 5 根横线 → 左转 → 左三 → 直走 → 左转
+     *                          → 第 6 根横线 → 左转 ==========================
+     * 盲走结束回到循迹模式：
+     *     ① 循到第 5 根横线                → 左转
+     *     ② 再次循迹，检测到最左三路全压线  → 直走 1 秒 → 左转
+     *     ③ 回到循迹模式，循到第 6 根横线   → 左转
+     *     → 路线结束
+     *
+     * ★ 第 ② 步用的是 Route_LineFollowUntilNextLeft3()（等"下一次"左三压线），
+     *   而不是写死"第 2 次"：左三压线在一趟里可能已经出现过好几次
+     *   （线偏到左边就会触发），写死编号很容易对不上。
+     *   "下一次"永远是对的。
+     * ★ 第 ② 步的"直走"用 Route_Straight()：这时候不看线、两轮同速直冲，
+     *   和 step1 的盲走是同一个原语，时长在菜单 ROUTE TIME 的 STR_ms 里。 */
+    Route_LineFollowUntilBlack(5u);
+    Route_TurnLeft(g_param.rt_tn2_ms);
     Route_Beep2();
 
-    Route_TurnLeft(g_param.rt_tn3_ms);      /* step6：左转 */
+    Route_LineFollowUntilNextLeft3();       /* 再次循迹，等下一次"左三压线" */
+    Route_Straight(g_param.rt_str_ms);      /* ★ 直走 1 秒（STR_ms）*/
+    Route_TurnLeft(g_param.rt_tn4_ms);
+    Route_Beep2();
+
+    Route_LineFollowUntilBlack(6u);
+    Route_TurnLeft(g_param.rt_tn3_ms);
     Route_Beep2();
 
     /* 路线结束 */
@@ -503,6 +651,18 @@ void APP_Route_Enter(void)
     BSP_OLED_DrawString(0u, 2u, "K1 : RUN ROUTE");
     BSP_OLED_DrawString(0u, 3u, "K2 : MENU/TUNE");
     BSP_OLED_DrawString(0u, 5u, "put car on the line");
+
+    /* ★ 把四个"方向类"开关直接摆在这里。
+       它们错了的后果最严重（车倒着冲、或者朝远离线的方向拐），
+       而其它参数的错只是"跑得不好"。开机就能看到，就不用每次
+       烧完固件再去菜单里翻一遍了。
+       顺序： MLINV / MRINV / STEERINV / ACTLOW
+       本车正确的值： 1 / 0 / 0 / 0 */
+    BSP_OLED_Printf(0u, 6u, "DIR %u/%u/%u/%u",
+                    (unsigned int)g_param.motor_l_inv,
+                    (unsigned int)g_param.motor_r_inv,
+                    (unsigned int)g_param.steer_inv,
+                    (unsigned int)g_param.act_low);
     BSP_OLED_DrawString(0u, 7u, "");
     BSP_OLED_Refresh();
 

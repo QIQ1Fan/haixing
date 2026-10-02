@@ -63,6 +63,18 @@ typedef enum {
     APP_CAR_STALL       /* 疑似堵转，已停车报警 */
 } APP_CarState_t;
 
+/**
+  * 循迹"结果事件"的编号 —— 路线脚本用它们来推进
+  * @note 三种结果各自有一个计数器，见 APP_Car_GetEventCount()。
+  *       掩码和去抖时间在 bsp_config.h 里的 CAR_EVT_* 一组宏里。
+  */
+typedef enum {
+    APP_CAR_EVT_LEFT3 = 0,  /* 最左三路全压线（线跑到车头左边去了）*/
+    APP_CAR_EVT_RIGHT3,     /* 最右三路全压线 */
+    APP_CAR_EVT_BLACK,      /* 全黑（横线 / 十字 / 停止线）*/
+    APP_CAR_EVT_NUM
+} APP_CarEvent_t;
+
 /** 实时状态快照。菜单、串口都从这里读，不自己去碰底层 */
 typedef struct {
     uint8_t  state;         /* APP_CarState_t */
@@ -75,6 +87,9 @@ typedef struct {
     int16_t  spd_l;         /* 实际下发给左轮的带符号速度 */
     int16_t  spd_r;         /* 实际下发给右轮的带符号速度 */
     uint16_t lost_ms;       /* 已经丢线多少毫秒（0 表示没丢线） */
+    uint16_t cnt_left3;     /* ★ 最左三路全压线的累计次数 */
+    uint16_t cnt_right3;    /* ★ 最右三路全压线的累计次数 */
+    uint16_t cnt_black;     /* ★ 全黑的累计次数（横线/十字）*/
     uint32_t run_ms;        /* 本次启动已经跑了多少毫秒 */
     int32_t  dist_l;        /* 左轮累计计数（本次启动清零） */
     int32_t  dist_r;        /* 右轮累计计数 */
@@ -124,6 +139,31 @@ const APP_CarStatus_t *APP_Car_GetStatus(void);
 
 /** @brief 状态名（ASCII，给屏幕和串口用） */
 const char *APP_Car_StateName(uint8_t state);
+
+/**
+  * @brief  ★ 取某个循迹"结果事件"的累计次数
+  * @param  evt APP_CAR_EVT_LEFT3 / RIGHT3 / BLACK
+  * @retval 从上一次 APP_Car_ResetEventCounts() 以来，该图案出现了几次
+  *
+  * 【计数规则：图案保持 + 重新武装】
+  *   图案必须【连续保持 CAR_EVT_HOLD_MS(80ms)】才算一次 ——
+  *   把过线的抖动、车体一晃都滤掉。
+  *   计过之后，图案要【连续消失 CAR_EVT_REARM_MS(400ms)】才允许再计 ——
+  *   这样"车正压在横线上"只会算一根，不会每 80ms 又数一根。
+  *
+  * 【为什么用计数而不是时间】
+  *   电池掉电压、车速变慢时，用时间切分的路段会走不到位；
+  *   而"第几次看到横线/第几次线跑到左边"和速度无关，永远对得上。
+  */
+uint16_t APP_Car_GetEventCount(uint8_t evt);
+
+/**
+  * @brief  清零三个事件计数器（每趟路线开始时调一次）
+  * @note   计数器在【待机时也会更新】—— 这样你可以推着车走一遍赛道，
+  *         在屏幕上看着计数对不对，不用真的开车。
+  *         所以每趟路线开始前必须清零，否则会把上一趟/标定时的数带进来。
+  */
+void APP_Car_ResetEventCounts(void);
 
 
 /** @brief 把一行状态打印到串口（★ 频率别太高，115200 下一行要几毫秒） */
