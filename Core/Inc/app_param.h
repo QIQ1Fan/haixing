@@ -104,6 +104,21 @@ typedef struct {
     uint16_t rt_tn3_ms;     /* step4 第 6 根横线后左转时长（★ 需实车标定） */
     uint16_t rt_tn4_ms;     /* step4 左三压线后左转时长（★ 需实车标定） */
     uint16_t rt_str_ms;     /* step4 左三压线后"直走"的时长（默认 1 秒）*/
+    uint16_t rt_post3_ms;   /* step6：扫到【第 8 根】线之后，再循迹走多久才左转
+                               （默认 1000 = 1 秒）*/
+    uint16_t rt_tn5_ms;     /* step6 左转时长（★ 需实车标定，默认 1 秒）*/
+    uint16_t rt_lf8_ms;     /* step8：第 9 根线之后，先循迹走多久（默认 6500 = 6.5 秒）*/
+    uint16_t rt_tn7_ms;     /* step8 的【右转】时长（默认 1000 = 1 秒）*/
+    uint16_t rt_tn6_ms;     /* ★ step7/step8 的【掉头】时长（原地转 180°），默认 2000。
+                               掉头 = 180°，按"90° ≈ 1000ms"估的 ——
+                               实测转不够就调大、转过头就调小；
+                               方向反了要把 app_route.c 里的
+                               Route_TurnLeft 换成 Route_TurnRight。 */
+    uint16_t rt_lf7_ms;     /* step7【先循迹走多久再放舵机】（默认 1000 = 1 秒）。
+                               ★ 它同时是"支撑脚什么时候放下"的时间点：
+                                  放下 = LF7_ms，升回 = LF7_ms + 2000
+                                 （2000 那个间隔写死在 app_route.c 的 S7_DOWN_GAP_MS）
+                               之后继续循迹，直到左路探头压到线为止。 */
     uint16_t rt_upst_ms;    /* step5【上台阶时盲走的总时长】（默认 14000 = 14 秒）。
                                舵机的四个时间点写死在 app_route.c 里
                                （3s 放下 / 6s 升起 / 8s 再放下 / 11s 完全升起），

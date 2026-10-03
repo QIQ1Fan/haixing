@@ -156,6 +156,9 @@ void Route_LineFollowUntilNextEvent(uint8_t evt);
 /** @brief 循线直到"最左三路全压"【下一次】出现 */
 void Route_LineFollowUntilNextLeft3(void);
 
+/** @brief 循线直到"全黑（横线）"【下一次】出现（不关心是第几根） */
+void Route_LineFollowUntilNextBlack(void);
+
 /** @brief 循线直到"最左三路全压"第 n 次 */
 void Route_LineFollowUntilLeft3(uint16_t n);
 

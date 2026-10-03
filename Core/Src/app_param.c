@@ -179,6 +179,22 @@ APP_Param_t g_param;
  * 全程车都在盲走（不停顿），走到 UPST_ms 用完为止。
  * ★ 舵机那四个时间点是写死在 app_route.c 里的（S5_xxx_MS），
  *   所以调这个数只改"走多久"，不会动舵机的节奏。 */
+/* step6：扫到第 7 根线之后，先【在循迹模式下】走多久（毫秒）—— "先走一小段路"。
+ * ★ 它同时是"支撑脚什么时候放下"的时间点：
+ *     放下 = LF6_ms，升回 = LF6_ms + 2000（那个间隔写死在 app_route.c）
+ * 之后继续循迹，直到再扫到一根黑线就急停，整条路线结束 */
+#define DEF_RT_POST3_MS     1000        /* step6：过【第 8 根】线后再循迹 1s */
+#define DEF_RT_TN5_MS       1000        /* step6 左转 ★ 待标定 */
+/* step7：先循迹走多久再放舵机（也是"舵机放下"的时间点）。
+ * 放下 = LF7_ms，升回 = LF7_ms + 2000（间隔写死在 app_route.c 的 S7_DOWN_GAP_MS），
+ * 之后继续循迹直到左路压线。 */
+#define DEF_RT_LF7_MS       1000
+/* step7 的掉头（原地转 180°）。按"90° ≈ 1000ms"估的 2000，
+ * 实测转不够/转过头就改这个数 */
+#define DEF_RT_TN6_MS       2000
+/* step8：第 9 根线之后先循迹 6.5 秒，再右转 1 秒 */
+#define DEF_RT_LF8_MS       6500
+#define DEF_RT_TN7_MS       1000
 #define DEF_RT_UPST_MS      14000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
@@ -240,7 +256,14 @@ const APP_ParamItem_t g_param_table[] = {
     { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "TN4_ms",   offsetof(APP_Param_t, rt_tn4_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "STR_ms",   offsetof(APP_Param_t, rt_str_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
-    { "UPST_ms",  offsetof(APP_Param_t, rt_upst_ms),   PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
+    /* ★ UPST_ms 上限必须 >= 默认值(14000)，否则上电 Clamp() 会把它夹小 */
+    { "UPST_ms",  offsetof(APP_Param_t, rt_upst_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
+    { "POST3_ms", offsetof(APP_Param_t, rt_post3_ms),  PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
+    { "TN5_ms",   offsetof(APP_Param_t, rt_tn5_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "LF7_ms",   offsetof(APP_Param_t, rt_lf7_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 30000.0f },
+    { "TN6_ms",   offsetof(APP_Param_t, rt_tn6_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "LF8_ms",   offsetof(APP_Param_t, rt_lf8_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 30000.0f },
+    { "TN7_ms",   offsetof(APP_Param_t, rt_tn7_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
@@ -353,6 +376,12 @@ static void param_fill_default(APP_Param_t *p)
     p->rt_tn3_ms  = (uint16_t)DEF_RT_TN3_MS;
     p->rt_tn4_ms  = (uint16_t)DEF_RT_TN4_MS;
     p->rt_str_ms  = (uint16_t)DEF_RT_STR_MS;
+    p->rt_post3_ms = (uint16_t)DEF_RT_POST3_MS;
+    p->rt_tn5_ms   = (uint16_t)DEF_RT_TN5_MS;
+    p->rt_lf7_ms   = (uint16_t)DEF_RT_LF7_MS;
+    p->rt_tn6_ms   = (uint16_t)DEF_RT_TN6_MS;
+    p->rt_lf8_ms   = (uint16_t)DEF_RT_LF8_MS;
+    p->rt_tn7_ms   = (uint16_t)DEF_RT_TN7_MS;
     p->rt_upst_ms = (uint16_t)DEF_RT_UPST_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;

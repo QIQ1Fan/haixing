@@ -38,6 +38,13 @@
   *     step4②  下一次左三压线         → 盲走 STR_ms  → 左转 TN4_ms
   *     step4③  第 5 根横线            → 循迹 POST_ms → 左转 TN3_ms
   *     step5   第 6 根横线（台阶前）  → 盲走 UPST_ms（默认 14 s），期间舵机四拍
+  *     step6   第 7 根横线（不转向）  → 舵机放下→升回 → 循到第 8 根线 → 循迹 POST3_ms(1 s) → 左转 TN5_ms(1 s)
+  *     step7   左转转完后的循迹段      → 循迹 LF7_ms(1 s) → 舵机放下→升回 → 到"左路有线"
+  *                                      → 掉头 TN6_ms(2 s) → 循迹 1 s → 盲走 5.5 s（舵机放下→升回）
+  *                                      → 切回循迹 → 循到第 9 根线（不停，接 step8）
+  *     step8   第 9 根线之后          → 循迹 LF8_ms(6.5 s) → 右转 TN7_ms(1 s)
+  *                                      → 盲走 15 s（第 2s 舵机放下→第 4s 升回、
+  *                                        第 5s 掉头 TN6_ms）→ 急停，路线结束
   *
   *   一共 4 次左转、2 段"循线之外的盲走"、1 段台阶动作。
   *   所有时长都在菜单 ROUTE TIME 页里可调，不用重编。
@@ -410,6 +417,11 @@ void Route_LineFollowUntilNextLeft3(void)
     Route_LineFollowUntilNextEvent((uint8_t)APP_CAR_EVT_LEFT3);
 }
 
+void Route_LineFollowUntilNextBlack(void)
+{
+    Route_LineFollowUntilNextEvent((uint8_t)APP_CAR_EVT_BLACK);
+}
+
 void Route_LineFollowUntilLeft3(uint16_t n)
 {
     Route_LineFollowUntilEvent((uint8_t)APP_CAR_EVT_LEFT3, n);
@@ -744,14 +756,19 @@ void APP_Route_Abort(void)
  *   第 2 步：0  （它自己等第 1 根）
  *   第 3 步：1  （第 1 根已经数过了 —— step3 自己等第 3 根）
  *   第 4 步：3  （第 3 根已经数过了 —— step4① 自己等第 4 根）
- *   第 5 步：5  （第 5 根已经数过了 —— step5 自己等第 7 根）
+ *   第 5 步：5  （第 5 根已经数过了 —— step5 自己等第 6 根）
+ *   第 6 步：6  （第 6 根已经数过了 —— step6 自己等第 7 根）
+ *   第 7 步：7  （第 7 根已经数过了 —— step7 不等横线，等【左路有线】）
+ *   第 8 步：9  （step7 结尾已经等了第 9 根 —— step8 不再等横线）
+ *   ★ 第 6 步特殊：它要等【第 7 根】和【第 8 根】两根，
+ *     所以预置 6 之后，先数到 7（不转向），再数到 8 才左转。
  *
  * ★ 改了路线里等的编号（比如把 UntilBlack(5u) 改成 6u），
  *   这张表要跟着改，否则"从中间开始跑"会对不上。
  * ★ LEFT3 不用预置：step1 等它的第 1 次（只有从头跑才用），
  *   step4 里用的是"下一次"（相对），不依赖前面的次数。
  * -------------------------------------------------------------------------- */
-#define ROUTE_STEP_NUM      5u
+#define ROUTE_STEP_NUM      8u
 
 static const uint16_t s_step_preset_black[ROUTE_STEP_NUM + 1u] = {
     0u,     /* [0] 占位，不用 */
@@ -759,7 +776,12 @@ static const uint16_t s_step_preset_black[ROUTE_STEP_NUM + 1u] = {
     0u,     /* 从第 2 步开始 */
     1u,     /* 从第 3 步开始：第 1 根已过，本步等第 3 根 */
     3u,     /* 从第 4 步开始：第 3 根已过，本步等第 4 根 */
-    5u      /* 从第 5 步开始：第 5 根已过，本步等第 7 根 */
+    5u,     /* 从第 5 步开始：第 5 根已过，本步等第 6 根 */
+    6u,     /* 从第 6 步开始：第 6 根已过，本步等第 7 根 */
+    8u,     /* 从第 7 步开始：step6 已经数到【第 8 根】了
+               （所以预置 8 —— step7 最后要等的是第 9 根）*/
+    9u      /* 从第 8 步开始：第 9 根已过（step7 结尾等的就是它），
+               本步不再等横线，直接开始循迹 6.5 秒 */
 };
 
 /** 第 n 步的短名字（给"从哪一步开始"的菜单页显示用） */
@@ -771,6 +793,9 @@ const char *APP_Route_StepName(uint8_t step)
     case 3u: return "line3 -> blind";
     case 4u: return "line4/5 -> left";
     case 5u: return "stairs + servo";
+    case 6u: return "line7/8 -> left";
+    case 7u: return "uturn + servo";
+    case 8u: return "right + blind";
     default: return "----";
     }
 }
@@ -967,6 +992,174 @@ void APP_Route_Run(void)
     /* ---- 然后一直盲走到时间用完 ----
        这期间车不停：舵机的四次收放由后台节拍按上面的时间点执行 */
     Route_Straight(g_param.rt_upst_ms);
+
+    Route_Beep2();
+    }
+
+    /* ==== step6：第 7 根线【不转向】→ 舵机放下升回 → 第 8 根线 → 循迹 1s → 左转 ====
+     *
+     * ★★ 注意：第 7 根线【只是个信号，不转向】★★
+     *   扫到第 7 根线之后车继续循迹，同时在循迹过程中把支撑脚放下再升回，
+     *   用这一下"过掉障碍"；然后一直循迹到【第 8 根线】才左转。
+     *
+     * 时间轴（t = 0 就是"扫到第 7 根线"的那一刻）：
+     *
+     *      t = 0s            车继续循迹（第 7 根线被"忽略"掉，只是触发点）
+     *      t = 0 ~ 3s        先保持循迹往前开 3 秒（走到障碍跟前）
+     *      t = 3s            支撑脚放下        ← S6_DOWN_DELAY_MS
+     *      t = 5s            支撑脚升回        ← 间隔 S6_DOWN_GAP_MS
+     *      t = 5s 之后       继续循迹，直到扫到【第 8 根线】
+     *      t = 第8根线       再循迹 POST3_ms(1 秒) 把车身摆正
+     *      然后              左转 TN5_ms(1 秒)
+     *
+     *   ★ 舵机两个时间点写死在下面（想改节奏就改这两个数）：
+     *       S6_DOWN_DELAY_MS = 测到第 7 根线之后【先循迹走多久】才放脚，
+     *                          也就是"障碍离触发线有多远"。
+     *       S6_DOWN_GAP_MS   = 脚放下之后隔多久收回。
+     *   ★ 全程都是循迹模式：这 5 秒里车一直在走、一直在纠偏，
+     *     不会停下来等舵机（舵机动作是"预约"的）。 */
+#define S6_DOWN_DELAY_MS  3000u     /* ★ 测到第 7 根线后，先循迹走 3 秒再放脚 */
+#define S6_DOWN_GAP_MS    2000u     /* 放下之后隔多久升回 */
+
+    if (s_from <= 6u) {
+    Route_LineFollowUntilBlack(7u);         /* 扫到第 7 根线（只是触发，不转向）*/
+
+    /* ---- 预约两个舵机动作（立刻返回，车接着循迹）---- */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, S6_DOWN_DELAY_MS);
+    Route_ServoAt((uint8_t)g_param.leg_up_deg,
+                  (uint16_t)(S6_DOWN_DELAY_MS + S6_DOWN_GAP_MS));
+
+    /* ---- 循迹到"舵机升回"那一刻（这期间一直循迹，不盲走）---- */
+    Route_LineFollow((uint16_t)(S6_DOWN_DELAY_MS + S6_DOWN_GAP_MS));
+
+    /* ---- 继续循迹到【第 8 根线】，再循迹一小段把车身摆正，然后左转 ---- */
+    Route_LineFollowUntilBlack(8u);
+    Route_LineFollow(g_param.rt_post3_ms);  /* 过线后再循迹 1 秒 */
+    Route_TurnLeft(g_param.rt_tn5_ms);      /* 左转 1 秒 */
+    Route_Beep2();
+    }
+
+    /* ==== step7：循迹1s → 盲走2s(舵机收放) → 左路有线 → 掉头
+     *              → 循迹1s → 盲走5s(舵机收放) → 循到第 9 根线 ==============
+     *
+     * ★★ 这一段的规律：每到"舵机收放"就切成【盲走】，其余时间都循迹 ★★
+     *   舵机动作全部用"预约"（Route_ServoAt），登记完就返回 ——
+     *   所以盲走/循迹都在继续走，不会停下来等舵机。
+     *
+     * 时间轴（两段盲走都是 S7_BLIND_MS = 5.5 秒 ——
+     *         第 1 段和【掉头回来】那段用的是同一个数；
+     *         舵机【放下的时间点不变】—— 还是各自盲走一开始就放，
+     *         放 2 秒后升回，所以升回之后车还会继续盲走 3.5 秒）：
+     *
+     *    t = 0s               step6 左转转完，重新开始循迹
+     *    t = 0 ~ 1s           循迹 1 秒（时长 = LF7_ms）
+     *    t = 1s               ★ 切【盲走】5.5 秒，同时支撑脚放下（第 1 次）
+     *    t = 3s               支撑脚升回
+     *    t = 6.5s             盲走结束 → ★ 切回【循迹】，直到【左路探头压到线】
+     *    ──────────────────────────────────────────────
+     *    接着                 ★ 掉头（原地转 180°，TN6_ms）
+     *    t = 0 ~ 1s           掉完头先【循迹】1 秒（S7C_LF_MS）
+     *    t = 1s               ★ 切【盲走】5.5 秒，同时支撑脚放下（第 2 次）
+     *    t = 3s               支撑脚升回
+     *    t = 6.5s             盲走结束 → ★ 切回【循迹】，
+     *                         循到【第 9 根线】→ 急停，路线结束
+     *
+     *   ★ 参数：
+     *       LF7_ms（菜单 ROUTE TIME）  第 1 段先循迹多久
+     *                                  （放脚的时刻 = 这段循迹结束、盲走开始的那一刻）
+     *       TN6_ms（菜单 ROUTE TIME）  掉头要转多久。掉头 = 180°，
+     *                                  按"90° ≈ 1000ms"估的默认 2000 ——
+     *                                  ★ 实测转不够/转过头就改它；
+     *                                    方向反了就把 Route_TurnLeft 换成 TurnRight
+     *   ★ 其余时间点写死在下面（S7_BLIND_MS / S7_DOWN_KEEP_MS / S7C_LF_MS）。
+     *   ★ "左路有线"用 Route_LineFollowUntilNextLeft3() —— 等【下一次】左三压线，
+     *     不写死"第几次"（左三在一趟里可能已经出现过好几次）。
+     *   ★ 盲走期间【不计数】—— 所以最后等的"第 9 根线"是
+     *     第 2 段盲走结束后重新开始数的那一根。 */
+#define S7_BLIND_MS      5500u      /* ★ 两段盲走都是 5.5 秒（第 1 段 + 掉头回来那段）*/
+#define S7_DOWN_KEEP_MS  2000u      /* 脚放下之后 2 秒升回（两段时间点一样，
+                                       放下的时刻 = 各自盲走开始那一刻）*/
+#define S7C_LF_MS        1000u      /* 掉完头先循迹 1 秒 */
+
+    if (s_from <= 7u) {
+    /* ---- 第 1 段：循迹 1 秒 → 盲走 2 秒（第 1 次舵机收放在盲走里完成）---- */
+    Route_LineFollow(g_param.rt_lf7_ms);        /* 先循迹 1 秒 */
+
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, 0u);             /* 盲走一开始就放下 */
+    Route_ServoAt((uint8_t)g_param.leg_up_deg, S7_DOWN_KEEP_MS);  /* 2 秒后升回 */
+
+    Route_Straight(S7_BLIND_MS);                /* ★ 盲走 5.5 秒（后 3.5 秒脚已收回）*/
+
+    /* ---- 切回循迹，直到左路探头压到线 ---- */
+    Route_LineFollowUntilNextLeft3();
+
+    /* ---- ★ 掉头：原地转 180°（用 TN6_ms 控制转多少）---- */
+    Route_TurnLeft(g_param.rt_tn6_ms);
+    Route_Beep2();                          /* 掉头是一个阶段，报一下 */
+
+    /* ---- 掉完头：先【循迹】1 秒 ---- */
+    Route_LineFollow(S7C_LF_MS);            /* ★ 新增：掉完头先循迹 1 秒 */
+
+    /* ---- 再【盲走】5 秒，期间放第 2 次脚 ----
+       ★ 盲走期间【不计数】—— 这一段压到的横线不算，
+         所以后面等的"第 9 根线"是盲走结束后重新开始数的那一根。 */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, 0u);             /* 盲走一开始就放下 */
+    Route_ServoAt((uint8_t)g_param.leg_up_deg, S7_DOWN_KEEP_MS);  /* 2 秒后升回 */
+    Route_Straight(S7_BLIND_MS);            /* ★ 盲走 5.5 秒（后 3.5 秒脚已收回）*/
+
+    /* ---- 盲走结束 → 回到循迹模式，循到【第 9 根线】 ----
+       （Route_LineFollowUntilBlack 内部会调 APP_Car_Start()，
+         所以这一行本身就是切换回循迹模式）
+       ★ 这里【不再急停】—— 第 9 根线之后直接接 step8 继续跑。 */
+    Route_LineFollowUntilBlack(9u);
+
+    Route_Beep2();
+    }
+
+    /* ============ step8：第 9 根线之后 → 循迹 6.5s → 右转
+     *              → 盲走 15s（第 2s 舵机放下、第 4s 升回；第 5s 掉头）=====
+     *
+     * 时间轴（t = 0 就是 step7 循到第 9 根线的那一刻）：
+     *
+     *    t = 0 ~ 6.5s         循迹（时长 LF8_ms，默认 6500）
+     *    接着                 ★ 右转（TN7_ms，默认 1 秒）
+     *    ──────────────────────────────────────────────
+     *    t = 0s               右转转完 → ★ 开始【盲走】，共 15 秒
+     *    t = 2s               支撑脚放下
+     *    t = 4s               支撑脚升回（放下 2 秒）
+     *    t = 5s               ★ 掉头（原地转 180°，TN6_ms）
+     *    t = 5s 之后          继续盲走 10 秒（合计 15 秒）
+     *    t = 15s              盲走结束 → 急停，整条路线结束
+     *
+     *   ★ 盲走的 15 秒 = 掉头前 5 秒（S8_BLIND1_MS）
+     *                  + 掉头后 10 秒（S8_BLIND2_MS）。
+     *     掉头是原地转、插在中间，所以拆成两段盲走来写。
+     *   ★ 舵机两个时间点是【盲走开始后第 2 秒 / 第 4 秒】，
+     *     和掉头无关（掉头在第 5 秒，那时脚已经收回了）。
+     *   ★ 掉头复用 step7 的 TN6_ms（都是 180°），不用单独标定。 */
+#define S8_DOWN_MS       2000u      /* 盲走开始后第 2 秒：放下 */
+#define S8_UP_MS         4000u      /* 第 4 秒：升回（放下 2 秒）*/
+#define S8_BLIND1_MS     5000u      /* 掉头前的盲走（第 5 秒掉头）*/
+#define S8_BLIND2_MS    10000u      /* 掉头后的盲走（合计 15 秒）*/
+
+    if (s_from <= 8u) {
+    Route_LineFollow(g_param.rt_lf8_ms);    /* 循迹 6.5 秒 */
+
+    Route_TurnRight(g_param.rt_tn7_ms);     /* ★ 右转 1 秒 */
+    Route_Beep2();
+
+    /* ---- 盲走第 1 段（5 秒），期间舵机放下再升回 ---- */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, S8_DOWN_MS);   /* t=2s 放下 */
+    Route_ServoAt((uint8_t)g_param.leg_up_deg,   S8_UP_MS);     /* t=4s 升回 */
+    Route_Straight(S8_BLIND1_MS);           /* 盲走 5 秒 */
+
+    /* ---- ★ 掉头（原地转 180°）---- */
+    Route_TurnLeft(g_param.rt_tn6_ms);
+    Route_Beep2();
+
+    /* ---- 盲走第 2 段（10 秒），走完急停，整条路线结束 ---- */
+    Route_Straight(S8_BLIND2_MS);
+    Route_Brake();                          /* ★ 盲走结束，立刻刹住 */
 
     Route_Beep2();
     }

@@ -90,7 +90,7 @@
 #define MENU_ROWS           6u      /* 主菜单 / 参数列表一屏能显示几行（page1..6） */
 #define MENU_LIVE_ROWS      4u      /* 行驶中调参页一屏几行（page1..4） */
 #define MENU_LIVE_MAX       6u      /* 行驶中调参最多放几个参数 */
-#define MENU_RT_NUM         10u     /* ROUTE TIME 页最多放几项（现在 10 项，超一屏会滚动）*/
+#define MENU_RT_NUM         16u     /* ROUTE TIME 页最多放几项（现在 16 项，超一屏会滚动）*/
 #define MENU_RT_ROWS        6u      /* 一屏显示几行（page1..6）*/
 #define MENU_VAL_X          66u     /* 列表里"值"的列（名字最长 8 字符 = 60 像素）*/
 
@@ -167,14 +167,16 @@ static const char *const s_menu_name[MI_NUM] = {
  * ========================================================================== */
 static const char *const s_rt_name[MENU_RT_NUM] = {
     "BLD1_ms", "POST_ms", "TN1_ms", "BLD2_ms", "POST2_ms", "TN2_ms",
-    "TN3_ms", "TN4_ms", "STR_ms", "UPST_ms"
+    "TN3_ms", "TN4_ms", "STR_ms", "UPST_ms",
+    "POST3_ms", "TN5_ms", "LF7_ms", "TN6_ms", "LF8_ms", "TN7_ms"
 };
 static uint8_t s_rt_idx[MENU_RT_NUM];       /* 参数表里的真实索引 */
 static uint8_t s_rt_cnt = 0u;               /* 实际找到几项 */
 static uint8_t s_rt_sel = 0u;               /* 光标（在 s_rt_idx 里的位置）*/
 static uint8_t s_rt_top = 0u;               /* 滚动窗口的首项 */
 
-static uint8_t s_step_sel = 1u;             /* "从第几步开始跑"选中的步号 */
+static uint8_t s_step_sel = 1u;             /* "从第几步开始跑"选中的步号（1 基）*/
+static uint8_t s_step_top = 1u;             /* START STEP 页滚动窗口的首项（1 基）*/
 
 /* 行驶中调参页关心的参数名。按名字查索引，查不到就跳过 ——
    这样以后参数表改名/删参数，这里不会编译报错，最多少显示一行 */
@@ -664,29 +666,69 @@ static void menu_draw_param_edit(void)
 
 
 /* --------------------------------------------------------------------------
- * UI_START_STEP —— 从第几个阶段开始跑
- *   page0    标题
- *   page1..5 五个阶段：序号 + 短名字，光标 '>'
- *   page6    当前选中的那一步从哪开始（更详细的说明留给注释）
+ * UI_START_STEP —— 从第几个阶段开始跑（★ 阶段多了会滚动，和主菜单一样）
+ *   page0    标题：当前步骤 / 总步骤数
+ *   page1..6 六个阶段：序号 + 短名字，光标 '>'
  *   page7    按键提示
+ *
+ * ★ 为什么必须能滚：阶段数已经 7 个，比一屏(6 行)多了 ——
+ *   不做滚动的话第 7 步就永远选不到（以前还出现过"提示文字把第 6 步盖掉"）。
+ *   滚动逻辑和主菜单的 menu_menu_fix_top() 一模一样，
+ *   只是这里的光标是【1 基】的步骤号，所以边界算法差 1。
  * -------------------------------------------------------------------------- */
+
+/** 让光标始终落在可见窗口里（阶段数超过一屏时才起作用） */
+static void menu_step_fix_top(void)
+{
+    uint8_t n       = APP_Route_StepCount();
+    uint8_t max_top;
+
+    if (s_step_sel < 1u) {
+        s_step_sel = 1u;
+    }
+    if (s_step_top < 1u) {
+        s_step_top = 1u;
+    }
+
+    /* 光标跑到窗口上方/下方 → 窗口跟着挪 */
+    if (s_step_sel < s_step_top) {
+        s_step_top = s_step_sel;
+    } else if ((uint16_t)s_step_sel >= ((uint16_t)s_step_top + MENU_ROWS)) {
+        s_step_top = (uint8_t)(s_step_sel - (MENU_ROWS - 1u));
+    }
+
+    /* 窗口底端不能超过最后一步：最多只能滚到 n-MENU_ROWS+1 */
+    max_top = (n > MENU_ROWS) ? (uint8_t)(n - MENU_ROWS + 1u) : 1u;
+    if (s_step_top > max_top) {
+        s_step_top = max_top;
+    }
+}
+
 static void menu_draw_start_step(void)
 {
     uint8_t n = APP_Route_StepCount();
     uint8_t i;
 
+    /* 标题行：光标位置 / 总步数。滚动之后必须靠它才知道翻到哪了 */
     BSP_OLED_Printf(0u, 0u, "START STEP %u/%u",
                     (unsigned int)s_step_sel, (unsigned int)n);
 
-    for (i = 1u; i <= n && i <= MENU_ROWS; i++) {
-        BSP_OLED_Printf(0u, i, "%c%u %s",
-                        (i == s_step_sel) ? '>' : ' ',
-                        (unsigned int)i,
-                        APP_Route_StepName(i));
+    /* 画窗口里的 MENU_ROWS 行（窗口首项是 s_step_top，1 基） */
+    for (i = 0u; i < MENU_ROWS; i++) {
+        uint8_t s = (uint8_t)(s_step_top + i);
+
+        if (s > n) {
+            break;                          /* 步骤不够一屏，剩下的留空 */
+        }
+
+        BSP_OLED_Printf(0u, (uint8_t)(1u + i), "%c%u %s",
+                        (s == s_step_sel) ? '>' : ' ',
+                        (unsigned int)s,
+                        APP_Route_StepName(s));
     }
 
-    BSP_OLED_DrawString(0u, 6u, "K1:GO FROM HERE");
-    BSP_OLED_DrawString(0u, 7u, "K2:BK K3+K4-");
+    /* ★ 提示行放 page7：绝不占用步骤行（以前放 page6 把最后一步盖掉过）*/
+    BSP_OLED_DrawString(0u, 7u, "K1:GO  K2:BK  K3/4:-");
 }
 
 static uint8_t menu_key_start_step(uint8_t key, uint8_t evt)
@@ -704,6 +746,7 @@ static uint8_t menu_key_start_step(uint8_t key, uint8_t evt)
         } else {
             s_step_sel = (uint8_t)(s_step_sel % n + 1u);
         }
+        menu_step_fix_top();        /* ★ 阶段多于一屏时让窗口跟着光标滚 */
         return 1u;
     }
 
@@ -1132,6 +1175,7 @@ static uint8_t menu_key_menu(uint8_t key, uint8_t evt)
     case MI_START_STEP:
         /* ★ 从指定阶段开始跑：进页面选第几步，K1 = 从那里开始 */
         s_step_sel = 1u;
+        s_step_top = 1u;
         s_page     = (uint8_t)UI_START_STEP;
         break;
 
