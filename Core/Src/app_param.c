@@ -86,7 +86,7 @@ APP_Param_t g_param;
  *   注意它同时也是"路线脚本里 Route_Straight / Route_LineFollow 的速度"。
  *   车速越快，同样的误差留给转向的时间就越短 —— 如果发现过弯跟不上，
  *   先降这个值；SLOWK（大偏差自动减速）也会在弯道里自动把它压下来。 */
-#define DEF_BASE_SPEED      1950
+#define DEF_BASE_SPEED      2800
 #define DEF_TURN_LIMIT      1500        /* 转向量上限：最狠时左右差 3000 */
 /* ★ 内轮最低速：履带车/大车建议 0，也就是【允许内侧履带反转】。
  *   轮式小车怕内轮停转造成顿挫，所以给 250 的底；
@@ -159,23 +159,23 @@ APP_Param_t g_param;
  *   循线段已经不用时间了（改成等"循迹结果事件"，和电池电压无关），
  *   只剩下"盲走"和"转弯"这两种必须用时间的地方。
  *   菜单 ROUTE TIME 页里随时能改，改完立刻生效 —— 下次按 K1 就用新值 */
-#define DEF_RT_BLD1_MS      7500        /* step1 盲走 7.5s */
+#define DEF_RT_BLD1_MS      4500        /* step1 盲走 4.5s */
 /* 第 1 根横线之后、左转之前再循迹的时长。
  * 车架大：压过横线的那一刻车身还没摆正，直接原地转会转歪。
  * 再循迹 1.5 秒，车刚好走到"线在正中间"的位置，这时候转最准 */
-#define DEF_RT_POST_MS      1500        /* step2 / step4① 过线后再循迹 */
-#define DEF_RT_POST2_MS     1000        /* step4③（第 5 根）过线后再循迹 */
+#define DEF_RT_POST_MS      1000        /* step2 / step4① 过线后再循迹（原 1.5s×0.7）*/
+#define DEF_RT_POST2_MS      700        /* step4③（第 5 根）过线后再循迹（原 1s×0.7）*/
 #define DEF_RT_TN1_MS       1000        /* step2 左转 ★ 待标定 */
-#define DEF_RT_BLD2_MS      6000        /* step3 盲走 6s */
-#define DEF_RT_TN2_MS       1000        /* step4① 第 4 根横线后左转 ★ 待标定 */
+#define DEF_RT_BLD2_MS      4200        /* step3 盲走（原 6s×0.7）*/
+#define DEF_RT_TN2_MS       1500        /* step4① 第 4 根横线后左转 1.5s ★ 待标定 */
 #define DEF_RT_TN3_MS       1000        /* step4③ 第 5 根横线后左转 ★ 待标定 */
 #define DEF_RT_TN4_MS       1000        /* step4② 左三压线后左转 ★ 待标定 */
 /* 检测到"最左三路全压线"之后、转弯之前，直走的时长。
  * 和 POST_ms 是一对：POST_ms 是"过横线后再循迹一段"，
  * STR_ms 是"过左三之后直接直走一段"（这时候不用循迹，直着走就行）*/
-#define DEF_RT_STR_MS       1000
+#define DEF_RT_STR_MS        700
 /* step5：【上台阶时盲走的总时长】（毫秒）。
- * 时间轴： t=0 开始盲走 → 3s 放下 → 6s 升起 → 8s 再放下 → 11s 完全升起，
+ * 时间轴： t=0 开始盲走 → 2s 放下 → 4s 升起 → 6s 再放下 → 9s 完全升起，
  * 全程车都在盲走（不停顿），走到 UPST_ms 用完为止。
  * ★ 舵机那四个时间点是写死在 app_route.c 里的（S5_xxx_MS），
  *   所以调这个数只改"走多久"，不会动舵机的节奏。 */
@@ -183,19 +183,19 @@ APP_Param_t g_param;
  * ★ 它同时是"支撑脚什么时候放下"的时间点：
  *     放下 = LF6_ms，升回 = LF6_ms + 2000（那个间隔写死在 app_route.c）
  * 之后继续循迹，直到再扫到一根黑线就急停，整条路线结束 */
-#define DEF_RT_POST3_MS     1000        /* step6：过【第 8 根】线后再循迹 1s */
+#define DEF_RT_POST3_MS      700        /* step6：过【第 8 根】线后再循迹（原 1s×0.7）*/
 #define DEF_RT_TN5_MS       1000        /* step6 左转 ★ 待标定 */
 /* step7：先循迹走多久再放舵机（也是"舵机放下"的时间点）。
  * 放下 = LF7_ms，升回 = LF7_ms + 2000（间隔写死在 app_route.c 的 S7_DOWN_GAP_MS），
  * 之后继续循迹直到左路压线。 */
-#define DEF_RT_LF7_MS       1000
+#define DEF_RT_LF7_MS        700
 /* step7 的掉头（原地转 180°）。按"90° ≈ 1000ms"估的 2000，
  * 实测转不够/转过头就改这个数 */
 #define DEF_RT_TN6_MS       2000
-/* step8：第 9 根线之后先循迹 6.5 秒，再右转 1 秒 */
-#define DEF_RT_LF8_MS       6500
+/* step8：第 9 根线之后先循迹 5 秒，再右转 1 秒 */
+#define DEF_RT_LF8_MS       3500
 #define DEF_RT_TN7_MS       1000
-#define DEF_RT_UPST_MS      14000
+#define DEF_RT_UPST_MS       9000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
@@ -244,7 +244,12 @@ const APP_ParamItem_t g_param_table[] = {
     { "CROSSms",  offsetof(APP_Param_t, cross_hold_ms),PTYPE_U16,  0,  50.0f,    0.0f,  2000.0f },
     /* ------------------------------- 保护 ------------------------------- */
     { "STALLms",  offsetof(APP_Param_t, stall_ms),     PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
-    /* ------------------------ 路线各阶段时长 ---------------------------- */
+    /* ------------------------ 路线各阶段时长 ----------------------------
+ * ★★ 车速 BASESPD 从 1950 提到 2800（×1.44）之后，
+ *    所有这些"走路"的时间都按 1950/2800 ≈ 0.7 缩过一遍，
+ *    目的是走同样的路程（时间 × 车速 = 距离）。
+ *    转弯时间 TN1~TN7 没动：转弯用独立的 PIVOT 速度。
+ *    实车还要微调 —— 先偏短一点，不够再往上加。 */
     /* 循线段步长 100ms（一段十几秒，长按 = 500/次）
        转弯段步长  50ms（一段不到 1 秒，50ms 大约对应 5 度，标定时要细） */
     { "BLD1_ms",  offsetof(APP_Param_t, rt_bld1_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
@@ -256,7 +261,7 @@ const APP_ParamItem_t g_param_table[] = {
     { "TN3_ms",   offsetof(APP_Param_t, rt_tn3_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "TN4_ms",   offsetof(APP_Param_t, rt_tn4_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "STR_ms",   offsetof(APP_Param_t, rt_str_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
-    /* ★ UPST_ms 上限必须 >= 默认值(14000)，否则上电 Clamp() 会把它夹小 */
+    /* ★ UPST_ms 上限必须 >= 默认值，否则上电 Clamp() 会把它夹小 */
     { "UPST_ms",  offsetof(APP_Param_t, rt_upst_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
     { "POST3_ms", offsetof(APP_Param_t, rt_post3_ms),  PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
     { "TN5_ms",   offsetof(APP_Param_t, rt_tn5_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
