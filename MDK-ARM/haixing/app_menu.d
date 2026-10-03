@@ -36,4 +36,5 @@ haixing\app_menu.o: ../Core/Inc/app_route.h
 haixing\app_menu.o: ../Core/Inc/bsp_key.h
 haixing\app_menu.o: ../Core/Inc/bsp_oled.h
 haixing\app_menu.o: ../Core/Inc/bsp_track.h
+haixing\app_menu.o: ../Core/Inc/bsp_servo.h
 haixing\app_menu.o: ../Core/Inc/bsp_buzzer.h

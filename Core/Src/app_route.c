@@ -4,16 +4,17 @@
   * @brief   ★ 路线脚本与动作原语实现
   *
   * 【数据流】
-  *   main.c / 串口命令
-  *        └─► APP_Route_Run()
+  *   开机 K1 / 菜单 RUN ROUTE / 菜单 START STEP / 串口 G
+  *        └─► APP_Route_Run()  或  APP_Route_RunFrom(第几步)
   *              └─► 一行一行调用动作原语（Route_xxx）
-  *                    └─► 每个原语内部：下发电机指令 → 循环等时间到
+  *                    └─► 每个原语内部：下发电机指令 → 循环等"时间到/事件到"
   *                          └─► route_tick()  ← 每 10ms 一次，把系统维持住
   *                                ├─ BSP_Encoder_Update()   采样
   *                                ├─ BSP_Key_Scan()         按键
   *                                ├─ BSP_Buzzer_Poll()      关蜂鸣
   *                                ├─ APP_Car_Update()       只在"循线段"里调
   *                                ├─ APP_Leg_Update()       支撑脚斜坡
+  *                                ├─ 到点的预约舵机动作（Route_ServoAt）
   *                                ├─ 按键处理：长按 K2 = 急停 + 中止路线
   *                                └─ OLED 状态刷新（每 200ms）
   *
@@ -27,6 +28,38 @@
   *   直行/转弯时是本模块在直接下指令。
   *   两者同时跑就会互相抢方向盘（PID 会立刻把直行指令改掉），
   *   所以 tick 里用一个参数决定"这一拍要不要让循迹环参与"。
+  *
+  * 【当前路线一览】—— 详细脚本在文件后半部分的 APP_Route_Run() 里
+  *
+  *     step1   最左三路全压线        → 盲走 BLD1_ms（默认 7.5 s）
+  *     step2   第 1 根横线            → 循迹 POST_ms → 左转 TN1_ms
+  *     step3   第 3 根横线            → 盲走 BLD2_ms（默认 5.5 s）
+  *     step4①  第 4 根横线            → 循迹 POST_ms → 左转 TN2_ms
+  *     step4②  下一次左三压线         → 盲走 STR_ms  → 左转 TN4_ms
+  *     step4③  第 5 根横线            → 循迹 POST_ms → 左转 TN3_ms
+  *     step5   第 7 根横线（台阶前）  → 盲走 4×UPST_ms，期间舵机四拍
+  *
+  *   一共 4 次左转、2 段"循线之外的盲走"、1 段台阶动作。
+  *   所有时长都在菜单 ROUTE TIME 页里可调，不用重编。
+  *
+  * 【三个必须知道的机制】
+  *   ① 循线段用"循迹结果事件"推进，不用时间 ——
+  *      电池掉电压、车速变慢，只是晚一点到，"第几根横线"永远对得上。
+  *
+  *   ② ★★ 盲走 / 直走 / 转弯期间【不计数】★★
+  *      那几段是闭着眼睛（或原地转）走的，压到横线也不算。
+  *      所以脚本里的"第几根横线"= "循迹时压到的第几根"，不是物理第几根。
+  *      ⇒ 改了任何一段盲走的起点，后面所有编号都要跟着重算
+  *        （包括 START STEP 用的那张预置表，见 APP_Route_Run 上方）。
+  *
+  *   ③ 舵机动作是【预约】出去的（Route_ServoAt）：调用只花几微秒就返回，
+  *      真正的动作由后台节拍按时间点执行 —— 所以车可以一边不停顿地走、
+  *      支撑脚一边按节奏收放（爬台阶就靠这个）。
+  *
+  * 【跑完 / 中止之后不会直接回菜单】
+  *   会停在"结果页"（ROUTE DONE / ROUTE ABORTED）上，
+  *   把停在第几步、三个计数器各是多少、探头现在看到什么留在屏幕上，
+  *   按任意键才回菜单。见 route_hold_result()。
   * ============================================================================
   */
 #include "app_route.h"
@@ -173,14 +206,31 @@ static void route_tick(uint8_t use_car)
             left = (used < (uint32_t)s_step_ms) ? ((uint32_t)s_step_ms - used) : 0u;
         }
 
+        const APP_CarStatus_t *st = APP_Car_GetStatus();
+
         BSP_OLED_Clear();
         BSP_OLED_DrawString(0u, 0u, "ROUTE RUNNING");
         BSP_OLED_Printf(0u, 2u, "STEP %u", (unsigned int)s_step_no);
         BSP_OLED_DrawString(0u, 3u, s_step_name);
         if (s_abort != 0u) {
             BSP_OLED_DrawString(0u, 5u, "ABORTED");
-        } else {
+        } else if (s_step_ms > 0u) {
             BSP_OLED_Printf(0u, 5u, "left %4u ms", (unsigned int)left);
+        } else {
+            BSP_OLED_DrawString(0u, 5u, "wait event...");
+        }
+        /* ★ 三个事件计数实时显示：左三 / 右三 / 全黑 + 当前掩码。
+           跑的时候盯着它，就能看出"脚本现在等在第几根线"、
+           以及是不是多算了一根 —— 排查计数问题全靠这一行。 */
+        {
+            char mstr[TRACK_SENSOR_NUM + 1u];
+
+            BSP_Track_MaskToString(BSP_Track_GetMask(), mstr);
+            BSP_OLED_Printf(0u, 6u, "L%u R%u B%u %s",
+                            (unsigned int)st->cnt_left3,
+                            (unsigned int)st->cnt_right3,
+                            (unsigned int)st->cnt_black,
+                            mstr);
         }
         BSP_OLED_DrawString(0u, 7u, "K2 HOLD:STOP");
         BSP_OLED_RefreshDirty();
@@ -284,6 +334,13 @@ static uint8_t route_wait_event_over(uint8_t evt, uint16_t base)
 {
     uint32_t t0 = HAL_GetTick();
     uint16_t shown = base;
+
+    /* ★★ 先"作废当前正压着的那一根" ★★
+     *   车停下或转完弯时，探头可能正压在线上（或压在地形黑边上）。
+     *   不作废的话，一进来第一拍就白送一次计数 ——
+     *   脚本就会提前一根线触发，现象正是"莫名检测到一根线"。
+     *   作废之后：必须先松开（保持 400ms），再重新压到才算新的一根。 */
+    APP_Car_ArmOnNext(evt);
 
     /* 一边循线一边等计数。★ 期间完全交给循迹环驱动电机，
        所以车一直在线上纠偏，不是"闭着眼睛等"。 */
@@ -531,6 +588,18 @@ void APP_Route_TestTurn(void)
     s_draw_tick = HAL_GetTick();
     s_beep2_stage = 0u;
 
+    /* ★ 清掉上一次跑剩下的预约舵机动作。
+       如果上一次路线是在 step5（舵机四拍）被长按 K2 中止的，
+       队列里可能还压着没执行的收放动作 —— 不清的话，
+       这个"左右方向自检"跑到一半舵机会自己动一下，非常难查。 */
+    {
+        uint8_t q;
+
+        for (q = 0u; q < ROUTE_SRVQ_MAX; q++) {
+            s_srvq[q].used = 0u;
+        }
+    }
+
     APP_Car_Stop();
     BSP_Motor_Stop();
 
@@ -545,6 +614,68 @@ void APP_Route_TestTurn(void)
     s_active = 0u;
     BSP_UART_SendString("[turn] done. if LEFT went right, flip STEERINV\r\n");
     BSP_OLED_ClearAndRefresh();
+}
+
+/**
+  * @brief  ★ 路线结束后停在"结果页"，把当时的数据留在屏幕上
+  * @param  aborted 1 = 是被长按 K2 中止的（标题显示 ABORTED）
+  *
+  * 【为什么要停一下】
+  *   整条路线几十秒，跑完（或者某一步失误被中止）之后最想知道的是
+  *   "它停在哪一步、三个计数器各数到几、当时探头看到什么"。
+  *   以前是一结束就清屏回主菜单，这些信息全丢了，只能重跑一遍。
+  *   现在把结果页留在屏幕上，按【任意键】才回菜单。
+  *
+  * ★ 这一页里电机是停着的，也不会调用 APP_Car_Update（不会突然动起来），
+  *   但 MASK 是【实时】读的 —— 所以你可以用手推着车看掩码怎么变。
+  */
+static void route_hold_result(uint8_t aborted)
+{
+    const APP_CarStatus_t *st = APP_Car_GetStatus();
+    uint32_t next = HAL_GetTick();
+
+    for (;;) {
+        uint32_t now = HAL_GetTick();
+        uint8_t  k;
+        char     mstr[TRACK_SENSOR_NUM + 1u];
+        char     rstr[TRACK_SENSOR_NUM + 1u];
+
+        if ((uint32_t)(now - next) < CTRL_PERIOD_MS) {
+            continue;                   /* 还没到下一拍（最多等 10ms）*/
+        }
+        next = now;
+
+        BSP_Key_Scan();
+        BSP_Buzzer_Poll();
+
+        /* 任意按键 → 离开（读事件即清事件） */
+        for (k = 0u; k < (uint8_t)KEY_ID_NUM; k++) {
+            BSP_KeyEvent_t e = BSP_Key_GetEvent((BSP_KeyId_t)k);
+
+            if ((e == KEY_EVENT_PRESS) || (e == KEY_EVENT_LONG)
+                || (e == KEY_EVENT_REPEAT)) {
+                return;
+            }
+        }
+
+        /* 每拍重画一次（掩码/原始电平是实时的，方便用手推车观察）*/
+        BSP_Track_MaskToString(BSP_Track_GetMask(), mstr);
+        BSP_Track_MaskToString(BSP_Track_GetRawMask(), rstr);
+
+        BSP_OLED_Clear();
+        BSP_OLED_DrawString(0u, 0u, (aborted != 0u) ? "ROUTE ABORTED"
+                                                   : "ROUTE DONE");
+        BSP_OLED_Printf(0u, 1u, "STEP %u", (unsigned int)s_step_no);
+        BSP_OLED_DrawString(0u, 2u, s_step_name);
+        BSP_OLED_Printf(0u, 3u, "L%u R%u B%u",
+                        (unsigned int)st->cnt_left3,
+                        (unsigned int)st->cnt_right3,
+                        (unsigned int)st->cnt_black);
+        BSP_OLED_Printf(0u, 4u, "M%s", mstr);
+        BSP_OLED_Printf(0u, 5u, "R%s", rstr);
+        BSP_OLED_DrawString(0u, 7u, "any key: MENU");
+        BSP_OLED_RefreshDirty();
+    }
 }
 
 /* ==========================================================================
@@ -566,19 +697,29 @@ void APP_Route_Abort(void)
  * --------------------------------------------------------------------------
  *   每一行是一个动作，按从上到下的顺序执行。
  *
- *   ★★ 本路线的思路：用"循迹结果出现了几次"来推进，不用死时间 ★★
+ *   ★★ 思路：用"循迹结果出现了几次"来推进，不用死时间 ★★
  *
  *   三种"循迹结果"各有一个计数器（在 app_car 里，掩码见 bsp_config.h）：
  *       LEFT3   最左三路全压线 —— 线跑到车头左边去了
  *       RIGHT3  最右三路全压线
- *       BLACK   全黑           —— 横线 / 十字 / 停止线
+ *       BLACK   全黑（八路全压）—— 横线 / 十字 / 台阶
  *
- *   计数是【累计】的，从本函数开头清零之后开始数，
- *   所以脚本里写的是"绝对第几次"：第 1 根横线、第 2 根横线……
+ *   计数【从本函数开头清零之后累计】，所以脚本里写的是"绝对第几次"：
+ *   第 1 根横线、第 3 根横线…… 要改就改这些数字。
  *
- *   只有两种动作用到时间（它们在菜单 ROUTE TIME 页里可调）：
- *       BLD*_ms  盲走：闭着眼睛直冲，用来过地形
- *       TN*_ms   转弯：原地左转，角度靠时间标定
+ *   ★★★ 盲走 / 直走 / 转弯期间不计数 ★★★
+ *     那几段车是闭着眼睛（或原地转）走的，压到横线也不算数。
+ *     所以"第几根横线"= "循迹时压到的第几根"。
+ *     ⇒ 改了任何一段盲走的起点，后面所有编号都要跟着重算
+ *       （以及下面那张预置表）。当前这条路线就是按这个规则排的：
+ *          盲走在第 3 根开始 → 后面依次是第 4、5 根，台阶在第 7 根。
+ *
+ *   只有三种动作用到时间（都在菜单 ROUTE TIME 页里可调）：
+ *       BLD*_ms   盲走：闭着眼睛直冲，用来过地形
+ *       STR_ms    直走：同上，用在"左三压线"之后
+ *       POST_ms   过线后再循迹一小段，把车身摆正了再转
+ *       TN*_ms    转弯：原地左转，角度靠时间标定
+ *       UPST_ms   台阶上每一步的间隔
  *
  *   ★ 好处：循线段不再随电池电压漂移 —— 慢一点就晚一点到，
  *     "第几次看到横线"永远对得上；标定一次就不用再管电量。
@@ -588,23 +729,24 @@ void APP_Route_Abort(void)
  *       每数到一个事件  嘀一声
  *       等到目标事件    嘀一声（短）
  *       一直等不到      嘀——（长，60 秒安全网）
+ *       整条结束        一声长音，然后停在"结果页"上
  * ========================================================================== */
 
 /* --------------------------------------------------------------------------
  * ★ 各阶段的"计数器预置值"
  * --------------------------------------------------------------------------
- * 脚本里等的是【绝对第几根横线】（第 4 根、第 5 根……），
+ * 脚本里等的是【绝对第几根横线】（第 3 根、第 4 根……），
  * 所以从中间某一步开始跑时，必须把计数器先垫成"前面那些步骤跑完之后
  * 应该有的数"，否则它会一直等一个永远不会来的编号。
  *
  * s_step_preset_black[n] = 从第 n 步开始跑时，BLACK 计数器预置成多少
  *   第 1 步：0  （什么都没数过）
  *   第 2 步：0  （它自己等第 1 根）
- *   第 3 步：1  （第 1 根已经数过了）
- *   第 4 步：4  （第 4 根已经数过了 —— step4 自己等第 5 根）
- *   第 5 步：6  （第 6 根已经数过了 —— step5 自己等第 8 根）
+ *   第 3 步：1  （第 1 根已经数过了 —— step3 自己等第 3 根）
+ *   第 4 步：3  （第 3 根已经数过了 —— step4① 自己等第 4 根）
+ *   第 5 步：5  （第 5 根已经数过了 —— step5 自己等第 7 根）
  *
- * ★ 改了路线里等的编号（比如把 UntilBlack(6u) 改成 7u），
+ * ★ 改了路线里等的编号（比如把 UntilBlack(5u) 改成 6u），
  *   这张表要跟着改，否则"从中间开始跑"会对不上。
  * ★ LEFT3 不用预置：step1 等它的第 1 次（只有从头跑才用），
  *   step4 里用的是"下一次"（相对），不依赖前面的次数。
@@ -615,9 +757,9 @@ static const uint16_t s_step_preset_black[ROUTE_STEP_NUM + 1u] = {
     0u,     /* [0] 占位，不用 */
     0u,     /* 从第 1 步开始 */
     0u,     /* 从第 2 步开始 */
-    1u,     /* 从第 3 步开始 */
-    4u,     /* 从第 4 步开始 */
-    6u      /* 从第 5 步开始 */
+    1u,     /* 从第 3 步开始：第 1 根已过，本步等第 3 根 */
+    3u,     /* 从第 4 步开始：第 3 根已过，本步等第 4 根 */
+    5u      /* 从第 5 步开始：第 5 根已过，本步等第 7 根 */
 };
 
 /** 第 n 步的短名字（给"从哪一步开始"的菜单页显示用） */
@@ -626,8 +768,8 @@ const char *APP_Route_StepName(uint8_t step)
     switch (step) {
     case 1u: return "start -> blind";
     case 2u: return "line1 -> left";
-    case 3u: return "line4 -> blind";
-    case 4u: return "line5/6 -> left";
+    case 3u: return "line3 -> blind";
+    case 4u: return "line4/5 -> left";
     case 5u: return "stairs + servo";
     default: return "----";
     }
@@ -726,24 +868,28 @@ void APP_Route_Run(void)
     Route_Beep2();
     }
 
-    /* ===================== step3：第 4 根横线 → 盲走 =====================
-     * ★ 注意这里等的是【第 4 根】：
-     *   中间第 2、3 根横线会正常循迹开过去、不做任何动作，
-     *   计数器照样在数，所以"等到第 4 根"就是"开过前面那两根之后"。
+    /* ===================== step3：第 3 根横线 → 盲走 =====================
+     * ★ 注意这里等的是【第 3 根】：
+     *   中间第 2 根横线会正常循迹开过去、不做任何动作，
+     *   计数器照样在数，所以"等到第 3 根"就是"开过第 2 根之后"。
      *   ★ 跑的时候听声音：每过一根横线会"嘀"一声，
-     *     听到第 4 声之后就该盲走了。 */
+     *     听到第 3 声之后就该盲走了。
+     *   ★★ 这一改，后面所有"第几根"都要跟着 -1 ★★
+     *     因为盲走段（Route_Straight）是闭着眼睛走的，
+     *     期间压到的横线【不计数】—— 盲走提前一根开始，
+     *     后面数到的编号整体就往前挪一根（见下面的预置表）。 */
     if (s_from <= 3u) {
-    Route_LineFollowUntilBlack(4u);
+    Route_LineFollowUntilBlack(3u);
     Route_Straight(g_param.rt_bld2_ms);     /* ★ 盲走（默认 5.5 秒）*/
     Route_Beep2();
     }
 
-    /* ============== step4：第 5 根横线 → 左转 → 左三 → 直走 → 左转
-     *                          → 第 6 根横线 → 左转 ==========================
+    /* ============== step4：第 4 根横线 → 左转 → 左三 → 直走 → 左转
+     *                          → 第 5 根横线 → 左转 ==========================
      * 盲走结束回到循迹模式：
-     *     ① 循到第 5 根横线                → 再循迹 POST_ms → 左转
+     *     ① 循到第 4 根横线                → 再循迹 POST_ms → 左转
      *     ② 再次循迹，检测到最左三路全压线  → 盲走 STR_ms   → 左转
-     *     ③ 回到循迹模式，循到第 6 根横线   → 再循迹 POST_ms → 左转
+     *     ③ 回到循迹模式，循到第 5 根横线   → 再循迹 POST_ms → 左转
      *     → 路线结束
      *
      * ★ ①③ 这两段"过线后再走一小段"是实测出来的：车架大，压到横线的那一刻
@@ -757,7 +903,7 @@ void APP_Route_Run(void)
      * ★ 第 ② 步的"直走"用 Route_Straight()：这时候不看线、两轮同速直冲，
      *   和 step1 的盲走是同一个原语，时长在菜单 ROUTE TIME 的 STR_ms 里。 */
     if (s_from <= 4u) {
-    Route_LineFollowUntilBlack(5u);
+    Route_LineFollowUntilBlack(4u);
     Route_LineFollow(g_param.rt_post_ms);   /* ★ 过线后再循迹一小段，把车身摆正 */
     Route_TurnLeft(g_param.rt_tn2_ms);
     Route_Beep2();
@@ -767,7 +913,7 @@ void APP_Route_Run(void)
     Route_TurnLeft(g_param.rt_tn4_ms);
     Route_Beep2();
 
-    Route_LineFollowUntilBlack(6u);
+    Route_LineFollowUntilBlack(5u);
     Route_LineFollow(g_param.rt_post_ms);   /* ★ 同上 */
     Route_TurnLeft(g_param.rt_tn3_ms);
     Route_Beep2();
@@ -777,9 +923,11 @@ void APP_Route_Run(void)
      *
      * ★ 台阶是【全黑】的 —— 在探头看来和"横线"是同一种图案，
      *   所以它同样会被 BLACK 计数器数到（连续全黑只算一次）。
-     *   实测：数到【第 8 根】的时候，车刚好停在台阶前。
+     *   实测：数到【第 7 根】的时候，车刚好停在台阶前
+     *   （原来写的是第 8 根；step3 的盲走提前到第 3 根之后，
+     *     后面的编号整体 -1，所以这里也跟着改成 7）。
      *
-     * 时间轴（t = 0 就是"检测到第 8 根线"的那一刻）：
+     * 时间轴（t = 0 就是"检测到第 7 根线"的那一刻）：
      *
      *      t = 0s    车开始【盲走】—— 从这里一直到 t=4s，车不停、不循线、直着走
      *      t = 1s    支撑脚放下（撑起车身）
@@ -800,7 +948,7 @@ void APP_Route_Run(void)
      * ★ 想让收放更"甩"（不等舵机走完就折返），把 UPST_ms 调到 500 左右；
      *   想让它每个位置停稳一点，就调到 1200~1500。 */
     if (s_from <= 5u) {
-    Route_LineFollowUntilBlack(8u);         /* 循到第 8 根（台阶前）*/
+    Route_LineFollowUntilBlack(7u);         /* 循到第 7 根（台阶前）*/
 
     {
         uint16_t t = g_param.rt_upst_ms;    /* 台阶上每一步的间隔（默认 1 秒）*/
@@ -825,15 +973,33 @@ void APP_Route_Run(void)
     /* ======================= ↑↑↑ 路线到这里结束 ↑↑↑ ======================= */
 
     /* ---- 收尾：不管怎么结束的，都必须把车停下来 ---- */
+    uint8_t was_aborted = s_abort;      /* ★ 先记下来：下面 APP_Route_Abort() 会把它置 1 */
+
     BSP_Motor_Brake();
     APP_Car_Stop();
     APP_Route_Abort();          /* 让后续的原语也立刻返回（中止时用） */
     s_active = 0u;
 
+    /* ★★ 把"从第几步开始"复位成 1 ★★
+     *   s_from 是静态变量，APP_Route_RunFrom() 会把它设成 3、4、5。
+     *   如果这里不复位，那"从第 4 步跑过一次"之后，
+     *   再从菜单按 RUN ROUTE、或下次开机按 K1 跑，
+     *   都会【悄悄从第 4 步开始】—— 前半条路线被跳过。
+     *   放在收尾处复位：这一趟跑完之后，一切回到"从头跑"。 */
+    s_from = 1u;
+
     BSP_UART_SendString("[route] done\r\n");
 
-    /* 屏幕交回菜单 */
-    BSP_OLED_ClearAndRefresh();
+    /* ★★ 停在结果页，不直接回主菜单 ★★
+     *   把"停在第几步、三个计数器各是多少、探头现在看到什么"留在屏幕上，
+     *   按任意键才回菜单（详见 route_hold_result 的说明）。
+     *   中止（长按 K2）也走这里，只是标题变成 ABORTED。 */
+    route_hold_result(was_aborted);
+
+    /* 按键之后：清屏，把屏幕交回菜单 */
+    BSP_OLED_Clear();
+    BSP_OLED_MarkAllDirty();
+    BSP_OLED_Refresh();
 }
 
 /**

@@ -77,6 +77,7 @@
 #include "bsp_key.h"
 #include "bsp_oled.h"
 #include "bsp_track.h"
+#include "bsp_servo.h"      /* 支撑脚页要显示当前脉宽 BSP_Servo_GetPulseUs() */
 #include "bsp_buzzer.h"
 
 /* ==========================================================================
@@ -860,6 +861,34 @@ static void menu_draw_leg(void)
  *     两者互补 ⇒ 极性配置对了（TRACK_ACTIVE_LOW）
  *     两者一样 ⇒ 极性配反了，或者探头输出根本不是开关量
  * -------------------------------------------------------------------------- */
+/* ★ SENSOR VIEW 的"全黑提示音"状态：
+   1 = 上一拍是"全黑"。用来做沿触发 —— 只在【由不黑变成全黑】的那一瞬间叫一声，
+   一直压着不会一直叫。
+
+   为什么需要它：标定"横线到底长什么样"的时候，眼睛盯着屏幕看掩码很累，
+   而且车推得快的时候根本来不及看。听着声音推过去就行：
+   嘀一声 = 这一下探头阵列全部压黑了，判据 CAR_EVT_MASK_BLACK 能不能用，
+   推两趟心里就有数了。 */
+static uint8_t s_sensor_black_prev = 0u;
+
+/** 每拍调用：在 SENSOR VIEW 页上做"全黑鸣一声" */
+static void menu_sensor_beep_poll(void)
+{
+    uint8_t black;
+
+    if (s_page != (uint8_t)UI_SENSOR) {
+        s_sensor_black_prev = 0u;       /* 离开这一页就复位，回来重新开始判 */
+        return;
+    }
+
+    black = BSP_Track_IsAllBlack();
+
+    if ((black != 0u) && (s_sensor_black_prev == 0u)) {
+        BSP_Buzzer_BeepAsync(80u);      /* ★ 非阻塞：不会把这一拍卡住 */
+    }
+    s_sensor_black_prev = black;
+}
+
 static void menu_draw_sensor(void)
 {
     uint8_t mask = BSP_Track_GetMask();
@@ -888,6 +917,9 @@ static void menu_draw_sensor(void)
     BSP_OLED_Printf(0u, 4u, "RAW  %s", raw_str);
     BSP_OLED_Printf(0u, 7u, "POL:%s K2:BACK",
                     (BSP_Track_GetActiveLow() != 0u) ? "LOW " : "HIGH");
+
+    /* 全黑时"嘀"一声：推着车走横线，凭声音就能确认八路全压的判据对不对
+       （见 menu_sensor_beep_poll()） */
 
     /* 误差用原始值和归一化值各显示一份：
        前者看探头权重表对不对，后者看 PID 实际吃到的量 */
@@ -1547,6 +1579,11 @@ void APP_Menu_Update(void)
     uint32_t now;
     uint32_t period;
     uint32_t age;
+
+    /* ---- ⓪ SENSOR VIEW 页的"全黑鸣一声" ----
+       放在最前面，每拍（10ms）判一次，所以推得快也不会漏。
+       别的页面里它什么都不做。 */
+    menu_sensor_beep_poll();
 
     /* ---- ① 处理按键（每拍都读，读走即清） ---- */
     if (menu_poll_key(&key, &evt) != 0u) {

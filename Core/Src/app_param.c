@@ -142,10 +142,7 @@ APP_Param_t g_param;
  *   否则"走 0.8 秒就刹车"会让人不停按 START，根本看不出控制效果。
  *   循迹整定好之后，想让它冲出赛道时自动停，改成 800~1500 即可。 */
 #define DEF_LOST_STOP_MS    6000
-#define DEF_CROSS_HOLD_MS   260
-/* ★ 循迹"结果事件"的判定阈值（实测值，见头文件里的说明）*/
-#define DEF_BLK_MIN         7           /* 至少 7 路压线算"横线" */
-#define DEF_EVT_HOLD_MS     25          /* 图案保持 25ms 就算一次 */         /* 十字路口保持直行 0.26 秒通过 */
+#define DEF_CROSS_HOLD_MS   260         /* 十字路口保持直行 0.26 秒通过 */
 
 /* ★ 默认 0 = 关闭堵转保护。
  *   它会判"给了占空比、编码器却一个计数都没有" —— 编码器如果还没接线，
@@ -224,9 +221,6 @@ const APP_ParamItem_t g_param_table[] = {
     /* ------------------------------- 丢线 ------------------------------- */
     { "LOSTTRN",  offsetof(APP_Param_t, lost_turn),    PTYPE_I16,  0,  50.0f,    0.0f,  3599.0f },
     { "LOSTms",   offsetof(APP_Param_t, lost_stop_ms), PTYPE_U16,  0, 100.0f,    0.0f, 15000.0f },
-    /* ------------------- 循迹结果事件的判定阈值 -------------------------- */
-    { "BLKMIN",   offsetof(APP_Param_t, blk_min),       PTYPE_U8,   0,   1.0f,    1.0f,     8.0f },
-    { "EVTHLD",   offsetof(APP_Param_t, evt_hold_ms),   PTYPE_U16,  0,   5.0f,   10.0f,   500.0f },
     /* ------------------------------- 十字 ------------------------------- */
     { "CROSSms",  offsetof(APP_Param_t, cross_hold_ms),PTYPE_U16,  0,  50.0f,    0.0f,  2000.0f },
     /* ------------------------------- 保护 ------------------------------- */
@@ -342,8 +336,6 @@ static void param_fill_default(APP_Param_t *p)
     p->lost_turn    = (int16_t)DEF_LOST_TURN;
     p->lost_stop_ms = (uint16_t)DEF_LOST_STOP_MS;
 
-    p->blk_min       = (uint8_t)DEF_BLK_MIN;
-    p->evt_hold_ms   = (uint16_t)DEF_EVT_HOLD_MS;
     p->cross_hold_ms = (uint16_t)DEF_CROSS_HOLD_MS;
 
     p->stall_ms = (uint16_t)DEF_STALL_MS;

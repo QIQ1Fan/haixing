@@ -656,7 +656,7 @@ extern "C" {
  *        6 = 删掉 EDGEN / PIVOTms（转角模式已舍弃，回到连续 PID 循迹）
  *        7 = 增加 LF1/TN1/LF2/TN2/LF3/TN3（路线各段时长做成可调参数）
  *        8 = 循线段改为"等循迹结果事件"，LF1~LF3 删掉，加 BLD1_ms / BLD2_ms */
-#define PARAM_VERSION               13u
+#define PARAM_VERSION               12u
 
 #ifdef __cplusplus
 }

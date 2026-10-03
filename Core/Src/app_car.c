@@ -112,14 +112,11 @@ typedef struct {
 
 static car_evt_t s_evt[APP_CAR_EVT_NUM];
 
-/* LEFT3 / RIGHT3 的图案掩码（bsp_config.h 里可改）。
-   ★ BLACK 不走掩码，改成"至少几路压线"（参数 BLKMIN）——
-     不要求八路全压，车稍微歪一点、或者横线比探头排窄一点，也照样算一根，
-     比死等 0xFF 稳得多。 */
+/* 三个通道对应的图案掩码（bsp_config.h 里可改） */
 static const uint8_t s_evt_mask[APP_CAR_EVT_NUM] = {
     CAR_EVT_MASK_LEFT3,     /* APP_CAR_EVT_LEFT3 */
     CAR_EVT_MASK_RIGHT3,    /* APP_CAR_EVT_RIGHT3 */
-    0x00u                   /* APP_CAR_EVT_BLACK：不用掩码 */
+    CAR_EVT_MASK_BLACK      /* APP_CAR_EVT_BLACK：八路全压 */
 };
 
 /** 数一个字节里有几个 1（压线几路） */
@@ -142,17 +139,11 @@ static uint8_t car_popcount(uint8_t v)
   */
 static uint8_t car_evt_present(uint8_t ch, uint8_t mask, uint8_t nblk)
 {
-    switch (ch) {
-    case (uint8_t)APP_CAR_EVT_BLACK:
-        /* ★ 至少 BLKMIN 路压线就算"横线"（默认 7 路）。
-           参数在菜单 TUNE PARAMS 里，改完立刻生效 */
-        return (nblk >= g_param.blk_min) ? 1u : 0u;
+    (void)nblk;     /* 压线路数暂时用不上（曾经用它做过"至少几路"的判据）*/
 
-    case (uint8_t)APP_CAR_EVT_LEFT3:
-    case (uint8_t)APP_CAR_EVT_RIGHT3:
-    default:
-        return ((mask & s_evt_mask[ch]) == s_evt_mask[ch]) ? 1u : 0u;
-    }
+    /* 三个通道都是"要求的那几路必须都压线"：
+         LEFT3  = 最左三路全压、RIGHT3 = 最右三路全压、BLACK = 八路全压 */
+    return ((mask & s_evt_mask[ch]) == s_evt_mask[ch]) ? 1u : 0u;
 }
 
 /**
@@ -178,7 +169,7 @@ static void car_evt_update(uint8_t ch, uint8_t mask, uint16_t dt_ms)
 
         /* 达到保持时间、而且"已武装" → 计一次，并立刻缴械，
            避免同一根横线被反复计数 */
-        if ((e->armed != 0u) && (e->hold >= g_param.evt_hold_ms)) {
+        if ((e->armed != 0u) && (e->hold >= CAR_EVT_HOLD_MS)) {
             e->armed = 0u;
             if (e->cnt < 0xFFFFu) {
                 e->cnt++;
@@ -407,6 +398,27 @@ uint16_t APP_Car_GetEventCount(uint8_t evt)
         return 0u;
     }
     return s_evt[evt].cnt;
+}
+
+void APP_Car_ArmOnNext(uint8_t evt)
+{
+    uint8_t mask;
+    uint8_t nblk;
+
+    if (evt >= (uint8_t)APP_CAR_EVT_NUM) {
+        return;
+    }
+
+    /* 现读一次探头：不依赖快照，待机/停车时也准 */
+    mask = BSP_Track_GetMask();
+    nblk = car_popcount(mask);
+
+    if (car_evt_present(evt, mask, nblk) != 0u) {
+        /* 现在已经压着了 → 缴械，并要求它先消失 400ms 才算新的一根 */
+        s_evt[evt].armed = 0u;
+        s_evt[evt].hold  = 0u;
+        s_evt[evt].away  = 0u;
+    }
 }
 
 void APP_Car_SetEventCount(uint8_t evt, uint16_t v)
