@@ -163,20 +163,23 @@ APP_Param_t g_param;
 /* 第 1 根横线之后、左转之前再循迹的时长。
  * 车架大：压过横线的那一刻车身还没摆正，直接原地转会转歪。
  * 再循迹 1.5 秒，车刚好走到"线在正中间"的位置，这时候转最准 */
-#define DEF_RT_POST_MS      1500
-#define DEF_RT_TN1_MS       900         /* step2 左转 ★ 待标定 */
-#define DEF_RT_BLD2_MS      5500        /* step3 盲走 5.5s */
-#define DEF_RT_TN2_MS       900         /* step4 第 5 根横线后左转 ★ 待标定 */
-#define DEF_RT_TN3_MS       900         /* step4 第 6 根横线后左转 ★ 待标定 */
-#define DEF_RT_TN4_MS       900         /* step4 左三压线后左转 ★ 待标定 */
+#define DEF_RT_POST_MS      1500        /* step2 / step4① 过线后再循迹 */
+#define DEF_RT_POST2_MS     1000        /* step4③（第 5 根）过线后再循迹 */
+#define DEF_RT_TN1_MS       1000        /* step2 左转 ★ 待标定 */
+#define DEF_RT_BLD2_MS      6000        /* step3 盲走 6s */
+#define DEF_RT_TN2_MS       1000        /* step4① 第 4 根横线后左转 ★ 待标定 */
+#define DEF_RT_TN3_MS       1000        /* step4③ 第 5 根横线后左转 ★ 待标定 */
+#define DEF_RT_TN4_MS       1000        /* step4② 左三压线后左转 ★ 待标定 */
 /* 检测到"最左三路全压线"之后、转弯之前，直走的时长。
  * 和 POST_ms 是一对：POST_ms 是"过横线后再循迹一段"，
  * STR_ms 是"过左三之后直接直走一段"（这时候不用循迹，直着走就行）*/
 #define DEF_RT_STR_MS       1000
-/* step5：上台阶时【每一步的间隔】（毫秒）。
- * 时间轴： t=0 开始盲走 → t=1×UPST 放下 → 2× 升起 → 3× 放下 → 4× 升起，
- * 全程车都在盲走（不停顿）。改这一个数，四个时间点一起等比变化 */
-#define DEF_RT_UPST_MS      1000
+/* step5：【上台阶时盲走的总时长】（毫秒）。
+ * 时间轴： t=0 开始盲走 → 3s 放下 → 6s 升起 → 8s 再放下 → 11s 完全升起，
+ * 全程车都在盲走（不停顿），走到 UPST_ms 用完为止。
+ * ★ 舵机那四个时间点是写死在 app_route.c 里的（S5_xxx_MS），
+ *   所以调这个数只改"走多久"，不会动舵机的节奏。 */
+#define DEF_RT_UPST_MS      14000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
 #define DEF_LEG_DOWN_DEG    180         /* 全放下（撑到最高） */
@@ -230,6 +233,7 @@ const APP_ParamItem_t g_param_table[] = {
        转弯段步长  50ms（一段不到 1 秒，50ms 大约对应 5 度，标定时要细） */
     { "BLD1_ms",  offsetof(APP_Param_t, rt_bld1_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
     { "POST_ms",  offsetof(APP_Param_t, rt_post_ms),   PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
+    { "POST2_ms", offsetof(APP_Param_t, rt_post2_ms),  PTYPE_U16,  0, 100.0f,    0.0f, 10000.0f },
     { "TN1_ms",   offsetof(APP_Param_t, rt_tn1_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "BLD2_ms",  offsetof(APP_Param_t, rt_bld2_ms),   PTYPE_U16,  0, 500.0f,    0.0f, 30000.0f },
     { "TN2_ms",   offsetof(APP_Param_t, rt_tn2_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
@@ -341,7 +345,8 @@ static void param_fill_default(APP_Param_t *p)
     p->stall_ms = (uint16_t)DEF_STALL_MS;
 
     p->rt_bld1_ms = (uint16_t)DEF_RT_BLD1_MS;
-    p->rt_post_ms = (uint16_t)DEF_RT_POST_MS;
+    p->rt_post_ms  = (uint16_t)DEF_RT_POST_MS;
+    p->rt_post2_ms = (uint16_t)DEF_RT_POST2_MS;
     p->rt_tn1_ms  = (uint16_t)DEF_RT_TN1_MS;
     p->rt_bld2_ms = (uint16_t)DEF_RT_BLD2_MS;
     p->rt_tn2_ms  = (uint16_t)DEF_RT_TN2_MS;

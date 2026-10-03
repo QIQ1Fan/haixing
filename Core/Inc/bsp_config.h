@@ -655,8 +655,17 @@ extern "C" {
  *        5 = 增加 ACTLOW（探头极性改成运行期可调，默认值按实车实测改为高电平有效）
  *        6 = 删掉 EDGEN / PIVOTms（转角模式已舍弃，回到连续 PID 循迹）
  *        7 = 增加 LF1/TN1/LF2/TN2/LF3/TN3（路线各段时长做成可调参数）
- *        8 = 循线段改为"等循迹结果事件"，LF1~LF3 删掉，加 BLD1_ms / BLD2_ms */
-#define PARAM_VERSION               12u
+ *        8 = 循线段改为"等循迹结果事件"，LF1~LF3 删掉，加 BLD1_ms / BLD2_ms
+ *        9 = 增加 CROSS_ms（穿地形的时间上限）+ 丢线事件计数
+ *       10 = 增加 LF4_ms（上台阶段）
+ *       11 = 增加 TN4_ms / STR_ms
+ *       12 = 增加 UPST_ms
+ *       13 = ★ 只改了默认值（TN1~TN4 全改 1000、UPST_ms 改成 14000），
+ *             但【默认值只有在版本号变了才会从 Flash 重新加载】——
+ *             不升版本号的话，Flash 里的旧值会一直生效，改默认值等于白改。
+ *             所以"改默认值"也必须升版本号。
+ *       14 = 增加 POST2_ms（step4③ 专用的过线循迹时长）；BLD2_ms 默认改 6000 */
+#define PARAM_VERSION               14u
 
 #ifdef __cplusplus
 }

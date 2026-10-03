@@ -37,7 +37,7 @@
   *     step4①  第 4 根横线            → 循迹 POST_ms → 左转 TN2_ms
   *     step4②  下一次左三压线         → 盲走 STR_ms  → 左转 TN4_ms
   *     step4③  第 5 根横线            → 循迹 POST_ms → 左转 TN3_ms
-  *     step5   第 7 根横线（台阶前）  → 盲走 4×UPST_ms，期间舵机四拍
+  *     step5   第 6 根横线（台阶前）  → 盲走 UPST_ms（默认 14 s），期间舵机四拍
   *
   *   一共 4 次左转、2 段"循线之外的盲走"、1 段台阶动作。
   *   所有时长都在菜单 ROUTE TIME 页里可调，不用重编。
@@ -718,8 +718,8 @@ void APP_Route_Abort(void)
  *       BLD*_ms   盲走：闭着眼睛直冲，用来过地形
  *       STR_ms    直走：同上，用在"左三压线"之后
  *       POST_ms   过线后再循迹一小段，把车身摆正了再转
- *       TN*_ms    转弯：原地左转，角度靠时间标定
- *       UPST_ms   台阶上每一步的间隔
+ *       TN*_ms    转弯：原地左转，角度靠时间标定（现在都是 1000）
+ *       UPST_ms   上台阶时盲走的总时长（默认 14 秒）
  *
  *   ★ 好处：循线段不再随电池电压漂移 —— 慢一点就晚一点到，
  *     "第几次看到横线"永远对得上；标定一次就不用再管电量。
@@ -889,12 +889,14 @@ void APP_Route_Run(void)
      * 盲走结束回到循迹模式：
      *     ① 循到第 4 根横线                → 再循迹 POST_ms → 左转
      *     ② 再次循迹，检测到最左三路全压线  → 盲走 STR_ms   → 左转
-     *     ③ 回到循迹模式，循到第 5 根横线   → 再循迹 POST_ms → 左转
+     *     ③ 回到循迹模式，循到第 5 根横线   → 再循迹 POST2_ms → 左转
      *     → 路线结束
      *
      * ★ ①③ 这两段"过线后再走一小段"是实测出来的：车架大，压到横线的那一刻
      *   车身还没摆正，直接原地转会转歪。多走这一小段，循迹环把车纠到
-     *   "线在探头正中间"，再转落点才准。时长就是 POST_ms，和 step2 共用一个。
+     *   "线在探头正中间"，再转落点才准。
+     *   ★ ① 和 step2 共用 POST_ms（默认 1.5 秒）；
+     *     ③ 用 POST2_ms（默认 1 秒）—— 这一处实测只要 1 秒。
      *
      * ★ 第 ② 步用的是 Route_LineFollowUntilNextLeft3()（等"下一次"左三压线），
      *   而不是写死"第 2 次"：左三压线在一趟里可能已经出现过好几次
@@ -914,7 +916,7 @@ void APP_Route_Run(void)
     Route_Beep2();
 
     Route_LineFollowUntilBlack(5u);
-    Route_LineFollow(g_param.rt_post_ms);   /* ★ 同上 */
+    Route_LineFollow(g_param.rt_post2_ms);  /* ★ 这一处只要 1 秒（POST2_ms）*/
     Route_TurnLeft(g_param.rt_tn3_ms);
     Route_Beep2();
     }
@@ -923,46 +925,48 @@ void APP_Route_Run(void)
      *
      * ★ 台阶是【全黑】的 —— 在探头看来和"横线"是同一种图案，
      *   所以它同样会被 BLACK 计数器数到（连续全黑只算一次）。
-     *   实测：数到【第 7 根】的时候，车刚好停在台阶前
-     *   （原来写的是第 8 根；step3 的盲走提前到第 3 根之后，
-     *     后面的编号整体 -1，所以这里也跟着改成 7）。
+     *   实测：数到【第 6 根】的时候，车刚好停在台阶前。
      *
-     * 时间轴（t = 0 就是"检测到第 7 根线"的那一刻）：
+     * 时间轴（t = 0 就是"检测到第 6 根线"的那一刻）：
      *
-     *      t = 0s    车开始【盲走】—— 从这里一直到 t=4s，车不停、不循线、直着走
-     *      t = 1s    支撑脚放下（撑起车身）
-     *      t = 2s    支撑脚升起
-     *      t = 3s    支撑脚再放下
-     *      t = 4s    支撑脚升起 —— 到这一刻整个 step5 结束
+     *      t = 0s     车开始【盲走】—— 从这里到 t=14s，车不停、不循线、直着走
+     *      t = 3s     支撑脚放下   （撑住台阶）
+     *      t = 6s     支撑脚升起   （放下了 3 秒）
+     *      t = 8s     支撑脚再放下 （升起了 2 秒）
+     *      t = 11s    支撑脚完全升起（放下了 3 秒）
+     *      t = 14s    盲走结束 → 整条路线结束
+     *
+     *   ★ 舵机的四个时间点就是上面这 3 / 6 / 8 / 11 秒，
+     *     想让节奏变快变慢，改下面那四个 #define 即可（它们只影响台阶这一段）。
      *
      * ★★ 关键：舵机的四个动作是【预约】出去的（Route_ServoAt），
      *    调用它们只花几微秒就返回，真正的动作由后台节拍按时间点执行 ——
-     *    所以车从 t=0 到 t=4s 一直在盲走，中间【一次都不停】。
+     *    所以车从 t=0 到 t=14s 一直在盲走，中间【一次都不停】。
      *    如果用 Route_Servo()（走过去再等它到位），车就会在每一拍停一下，
      *    那是爬不上台阶的。
      *
-     * ★ 每一个动作间隔 = UPST_ms（菜单 ROUTE TIME 页最后一项，默认 1 秒）。
-     *   改这一个数，四个时间点和总时长一起等比变化
-     *   （总盲走时长 = 4 × UPST_ms）。
-     *
-     * ★ 想让收放更"甩"（不等舵机走完就折返），把 UPST_ms 调到 500 左右；
-     *   想让它每个位置停稳一点，就调到 1200~1500。 */
+     * ★ 总盲走时长 = 菜单 ROUTE TIME 页的 UPST_ms（默认 14000 = 14 秒）。
+     *   舵机的四个时间点是写死的（上面那四个 #define）——
+     *   所以调 UPST_ms 只改"走多久"，不会动舵机节奏。 */
+#define S5_DOWN1_MS     3000u       /* t=3s   放下 */
+#define S5_UP1_MS       6000u       /* t=6s   升起（放下了 3 秒）*/
+#define S5_DOWN2_MS     8000u       /* t=8s   再放下（升起了 2 秒）*/
+#define S5_UP2_MS      11000u       /* t=11s  完全升起（放下了 3 秒）*/
+
     if (s_from <= 5u) {
-    Route_LineFollowUntilBlack(7u);         /* 循到第 7 根（台阶前）*/
+    Route_LineFollowUntilBlack(6u);         /* 循到第 6 根（台阶前）*/
 
-    {
-        uint16_t t = g_param.rt_upst_ms;    /* 台阶上每一步的间隔（默认 1 秒）*/
+    /* ---- 先把四个舵机动作预约好（立刻返回，车这就开始走）----
+       角度用参数 LEGDN / LEGUP（菜单里标定过的"放下位/收起位"），
+       不写死 180/0 —— 以后标定改了角度，这里自动跟着改 */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, S5_DOWN1_MS);
+    Route_ServoAt((uint8_t)g_param.leg_up_deg,   S5_UP1_MS);
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, S5_DOWN2_MS);
+    Route_ServoAt((uint8_t)g_param.leg_up_deg,   S5_UP2_MS);
 
-        /* ---- 先把四次舵机动作预约好（立刻返回，车这就开始走）---- */
-        Route_ServoAt((uint8_t)g_param.leg_down_deg, (uint16_t)(t * 1u));
-        Route_ServoAt((uint8_t)g_param.leg_up_deg,   (uint16_t)(t * 2u));
-        Route_ServoAt((uint8_t)g_param.leg_down_deg, (uint16_t)(t * 3u));
-        Route_ServoAt((uint8_t)g_param.leg_up_deg,   (uint16_t)(t * 4u));
-
-        /* ---- 然后一直盲走到最后一次收脚完成 ----
-           这期间车不停：舵机的四次收放由后台节拍按上面的时间点执行 */
-        Route_Straight((uint16_t)(t * 4u));
-    }
+    /* ---- 然后一直盲走到时间用完 ----
+       这期间车不停：舵机的四次收放由后台节拍按上面的时间点执行 */
+    Route_Straight(g_param.rt_upst_ms);
 
     Route_Beep2();
     }

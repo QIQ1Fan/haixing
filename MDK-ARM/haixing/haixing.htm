@@ -3,9 +3,9 @@
 <title>Static Call Graph - [haixing\haixing.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image haixing\haixing.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sat Oct 03 11:51:18 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060960: Last Updated: Sat Oct 03 14:05:19 2026
 <BR><P>
-<H3>Maximum Stack Usage =        424 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
+<H3>Maximum Stack Usage =        416 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
 __rt_entry_main &rArr; main &rArr; APP_Menu_Update &rArr; menu_dispatch &rArr; menu_key_menu &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 <P>
@@ -370,7 +370,7 @@ Global Symbols
 <P><STRONG><a name="[1d2]"></a>__rt_entry_postsh_1</STRONG> (Thumb, 0 bytes, Stack size unknown bytes, __rtentry2.o(.ARM.Collect$$rtentry$$00000009))
 
 <P><STRONG><a name="[6e]"></a>__rt_entry_main</STRONG> (Thumb, 0 bytes, Stack size unknown bytes, __rtentry2.o(.ARM.Collect$$rtentry$$0000000D))
-<BR><BR>[Stack]<UL><LI>Max Depth = 424 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 416 + Unknown Stack Size
 <LI>Call Chain = __rt_entry_main &rArr; main &rArr; APP_Menu_Update &rArr; menu_dispatch &rArr; menu_key_menu &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[6f]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
@@ -1207,7 +1207,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[d0]"></a>APP_Menu_Update</STRONG> (Thumb, 184 bytes, Stack size 24 bytes, app_menu.o(i.APP_Menu_Update))
-<BR><BR>[Stack]<UL><LI>Max Depth = 416 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 408 + Unknown Stack Size
 <LI>Call Chain = APP_Menu_Update &rArr; menu_dispatch &rArr; menu_key_menu &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[b3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;BSP_Track_IsAllBlack
@@ -1339,7 +1339,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[e7]"></a>APP_Route_Enter</STRONG> (Thumb, 264 bytes, Stack size 32 bytes, app_route.o(i.APP_Route_Enter))
-<BR><BR>[Stack]<UL><LI>Max Depth = 384 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 376 + Unknown Stack Size
 <LI>Call Chain = APP_Route_Enter &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[a6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GetTick
@@ -1357,8 +1357,8 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[6f]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
 </UL>
 
-<P><STRONG><a name="[ec]"></a>APP_Route_Run</STRONG> (Thumb, 362 bytes, Stack size 32 bytes, app_route.o(i.APP_Route_Run))
-<BR><BR>[Stack]<UL><LI>Max Depth = 352 + Unknown Stack Size
+<P><STRONG><a name="[ec]"></a>APP_Route_Run</STRONG> (Thumb, 348 bytes, Stack size 24 bytes, app_route.o(i.APP_Route_Run))
+<BR><BR>[Stack]<UL><LI>Max Depth = 344 + Unknown Stack Size
 <LI>Call Chain = APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[a4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;BSP_Motor_Stop
@@ -1389,7 +1389,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[f9]"></a>APP_Route_RunFrom</STRONG> (Thumb, 20 bytes, Stack size 0 bytes, app_route.o(i.APP_Route_RunFrom))
-<BR><BR>[Stack]<UL><LI>Max Depth = 352 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 344 + Unknown Stack Size
 <LI>Call Chain = APP_Route_RunFrom &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[ec]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;APP_Route_Run
@@ -2656,7 +2656,7 @@ Global Symbols
 </UL>
 
 <P><STRONG><a name="[6f]"></a>main</STRONG> (Thumb, 150 bytes, Stack size 8 bytes, main.o(i.main))
-<BR><BR>[Stack]<UL><LI>Max Depth = 424 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 416 + Unknown Stack Size
 <LI>Call Chain = main &rArr; APP_Menu_Update &rArr; menu_dispatch &rArr; menu_key_menu &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[153]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MX_GPIO_Init
@@ -3094,7 +3094,7 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[b7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;BSP_PID_UpdateErr
 </UL>
 
-<P><STRONG><a name="[e3]"></a>param_fill_default</STRONG> (Thumb, 152 bytes, Stack size 8 bytes, app_param.o(i.param_fill_default))
+<P><STRONG><a name="[e3]"></a>param_fill_default</STRONG> (Thumb, 150 bytes, Stack size 8 bytes, app_param.o(i.param_fill_default))
 <BR><BR>[Stack]<UL><LI>Max Depth = 16<LI>Call Chain = param_fill_default &rArr; APP_Param_Checksum
 </UL>
 <BR>[Calls]<UL><LI><a href="#[d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;APP_Param_Checksum
@@ -3199,7 +3199,7 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[d2]"></a>menu_dispatch</STRONG> (Thumb, 190 bytes, Stack size 16 bytes, app_menu.o(i.menu_dispatch))
-<BR><BR>[Stack]<UL><LI>Max Depth = 392 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 384 + Unknown Stack Size
 <LI>Call Chain = menu_dispatch &rArr; menu_key_menu &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[e4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;APP_Param_Save
@@ -3417,7 +3417,7 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[16f]"></a>menu_key_menu</STRONG> (Thumb, 268 bytes, Stack size 24 bytes, app_menu.o(i.menu_key_menu))
-<BR><BR>[Stack]<UL><LI>Max Depth = 376 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 368 + Unknown Stack Size
 <LI>Call Chain = menu_key_menu &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[a9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;APP_Car_Stop
@@ -3466,7 +3466,7 @@ Local Symbols
 </UL>
 
 <P><STRONG><a name="[172]"></a>menu_key_start_step</STRONG> (Thumb, 104 bytes, Stack size 16 bytes, app_menu.o(i.menu_key_start_step))
-<BR><BR>[Stack]<UL><LI>Max Depth = 368 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 360 + Unknown Stack Size
 <LI>Call Chain = menu_key_start_step &rArr; APP_Route_RunFrom &rArr; APP_Route_Run &rArr; Route_TurnLeft &rArr; route_pivot &rArr; route_wait &rArr; route_tick &rArr; BSP_OLED_Printf &rArr; vsnprintf &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[cc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;BSP_OLED_Refresh
