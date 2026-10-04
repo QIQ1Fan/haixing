@@ -193,8 +193,9 @@ APP_Param_t g_param;
  * 实测转不够/转过头就改这个数 */
 #define DEF_RT_TN6_MS       2000
 /* step8：第 9 根线之后先循迹 5 秒，再右转 1 秒 */
-#define DEF_RT_LF8_MS       3500
-#define DEF_RT_TN7_MS       1000
+#define DEF_RT_LF8_MS       3000
+#define DEF_RT_TN7_MS       1150        /* step8 第 2 次右转：目标 105°（按 100°=1100ms 折算）*/
+#define DEF_RT_TN8_MS       1100        /* step8 第 1 次右转：目标 100°（按 1000ms≈90° 折算）*/
 #define DEF_RT_UPST_MS       9000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
@@ -269,6 +270,7 @@ const APP_ParamItem_t g_param_table[] = {
     { "TN6_ms",   offsetof(APP_Param_t, rt_tn6_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "LF8_ms",   offsetof(APP_Param_t, rt_lf8_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 30000.0f },
     { "TN7_ms",   offsetof(APP_Param_t, rt_tn7_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "TN8_ms",   offsetof(APP_Param_t, rt_tn8_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
@@ -387,6 +389,7 @@ static void param_fill_default(APP_Param_t *p)
     p->rt_tn6_ms   = (uint16_t)DEF_RT_TN6_MS;
     p->rt_lf8_ms   = (uint16_t)DEF_RT_LF8_MS;
     p->rt_tn7_ms   = (uint16_t)DEF_RT_TN7_MS;
+    p->rt_tn8_ms   = (uint16_t)DEF_RT_TN8_MS;
     p->rt_upst_ms = (uint16_t)DEF_RT_UPST_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;
