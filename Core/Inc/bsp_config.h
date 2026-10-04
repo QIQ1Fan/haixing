@@ -694,8 +694,9 @@ extern "C" {
  *       30 = TN7_ms 1000 → 1100（第 2 次右转也是 100°）；
  *            step8 盲走第 2 段改回 3 秒，并在右转后新增 2.5 秒盲走
  *       31 = LF8_ms 4000 → 3000（step8 先循迹 3 秒）
- *       32 = TN7_ms 1100 → 1150（step8 第 2 次右转改成 105°）*/
-#define PARAM_VERSION               32u
+ *       32 = TN7_ms 1100 → 1150（step8 第 2 次右转改成 105°）
+ *       33 = TN7_ms 1150 → 1200（改成"倒车后的左转 110°"）*/
+#define PARAM_VERSION               33u
 
 #ifdef __cplusplus
 }

@@ -156,6 +156,10 @@ void Route_LineFollowUntilNextEvent(uint8_t evt);
 /** @brief 循线直到"最左三路全压"【下一次】出现 */
 void Route_LineFollowUntilNextLeft3(void);
 
+/** @brief 直行 ms 毫秒（两轮同速前进，不看线） */
+/** @brief 倒车 ms 毫秒（两轮同速反转，不看线） */
+void Route_Reverse(uint16_t ms);
+
 /** @brief 循线直到"全黑（横线）"【下一次】出现（不关心是第几根） */
 void Route_LineFollowUntilNextBlack(void);
 

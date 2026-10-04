@@ -194,7 +194,7 @@ APP_Param_t g_param;
 #define DEF_RT_TN6_MS       2000
 /* step8：第 9 根线之后先循迹 5 秒，再右转 1 秒 */
 #define DEF_RT_LF8_MS       3000
-#define DEF_RT_TN7_MS       1150        /* step8 第 2 次右转：目标 105°（按 100°=1100ms 折算）*/
+#define DEF_RT_TN7_MS       1200        /* step8 倒车之后的【左转】110°（按 100°=1100ms 折算）*/
 #define DEF_RT_TN8_MS       1100        /* step8 第 1 次右转：目标 100°（按 1000ms≈90° 折算）*/
 #define DEF_RT_UPST_MS       9000
 
