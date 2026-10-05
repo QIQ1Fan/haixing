@@ -95,6 +95,9 @@ uint8_t APP_Route_IsActive(void);
   */
 void APP_Route_Abort(void);
 
+/** @brief 清掉中止标志（菜单里手动跑动作之前调一下） */
+void APP_Route_ClearAbort(void);
+
 /* ==========================================================================
  * 动作原语 —— 在脚本里按顺序调用
  * ========================================================================== */
@@ -181,6 +184,15 @@ void Route_Straight(uint16_t ms);
   *         转多少度靠时间标定（跑一次量角度，再按比例改时间）
   */
 void Route_TurnLeft(uint16_t ms);
+
+/**
+ * @brief 原地转向：dir = -1 左转、+1 右转；spd = 速度；ms = 时长
+ * @note  速度显式传入 —— 菜单里的"转向标定工具"用它自己设的速度。
+ */
+void Route_Pivot(int8_t dir, int16_t spd, uint16_t ms, const char *name);
+
+/** @brief 原地左转，直到八路探头【全部压线（全黑）】才停（事件驱动，比定时准） */
+void Route_TurnLeftUntilBlack(void);
 
 /** @brief 原地右转 ms 毫秒 */
 void Route_TurnRight(uint16_t ms);

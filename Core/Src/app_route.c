@@ -45,7 +45,7 @@
   *                                      → 切回循迹 → 循到第 9 根线（不停，接 step8）
   *     step8   第 9 根线之后          → 循迹 LF8_ms(3 s) → 右转 100° TN8_ms(1.1 s)
   *                                      → 盲走 3.5 s（第 1.4s 舵机放下→第 2.8s 升回）
-  *                                      → 倒车 S8_REV_MS(3 s) → 左转 110° TN7_ms(1.2 s)
+  *                                      → 倒车 S8_REV_MS(3 s) → 左转 120° TN7_ms(1.3 s)
   *                                      → 盲走 2 s
   *                                      → 切回循迹 → 循到第 10 根线急停，路线结束
   *
@@ -485,10 +485,19 @@ void Route_Reverse(uint16_t ms)
     BSP_Motor_Stop();
 }
 
-/** 原地转向的公共实现。dir = -1 左转，+1 右转 */
-static void route_pivot(int8_t dir, uint16_t ms, const char *name)
+/**
+ * @brief  原地转向：dir = -1 左转、+1 右转；spd = 搓地的速度；ms = 转多久
+ * @note   ★ 速度和时长都显式传进来 —— 路线里的 Route_TurnLeft/Right 用
+ *         g_param.pivot_spd，而菜单里的"转向标定工具"要用它自己设的速度，
+ *         所以这里不能写死取参数。
+ */
+void Route_Pivot(int8_t dir, int16_t spd, uint16_t ms, const char *name)
 {
-    int16_t t = g_param.pivot_spd;
+    int16_t t = spd;
+
+    if (t < 0) {
+        t = (int16_t)(-t);              /* 速度只取大小，方向由 dir 决定 */
+    }
     int16_t l;
     int16_t r;
 
@@ -521,14 +530,73 @@ static void route_pivot(int8_t dir, uint16_t ms, const char *name)
     BSP_Motor_Stop();
 }
 
+/**
+ * @brief  原地左转，直到八路探头【全部压线（全黑）】为止
+ * @note   ★ 和 Route_TurnLeft(ms) 的区别：这个是【事件驱动】的 ——
+ *         转到位置就停，电池快慢、地面打滑都不影响落点。
+ *         用的还是 BLACK 事件（全黑持续 80ms 才算一次，之后要
+ *         离开 400ms 才能再算），所以不会因为抖动提前停。
+ *         转向期间【电机由本函数直接控制】，但每拍都调
+ *         APP_Car_PollEvents() 让计数器继续走。
+ *         ROUTE_TURN_EVT_TIMEOUT_MS(3500) 是安全网：转 3.5 秒还没全黑就放弃，
+ *         免得车原地打转烧电机。
+ */
+#define ROUTE_TURN_EVT_TIMEOUT_MS   3500u   /* 转 3.5 秒还没全黑就放弃 */
+
+void Route_TurnLeftUntilBlack(void)
+{
+    int16_t  t = g_param.pivot_spd;
+    int16_t  l;
+    int16_t  r;
+    uint16_t base;
+    uint32_t t0;
+
+    route_begin_step("TURN-L >BLK", 0u);
+
+    if (s_abort != 0u) {
+        return;
+    }
+
+    /* ---- 先【武装】：把当前就压着的那根线丢掉，等的是【下一次】全黑 ---- */
+    APP_Car_ArmOnNext((uint8_t)APP_CAR_EVT_BLACK);
+    base = APP_Car_GetEventCount((uint8_t)APP_CAR_EVT_BLACK);
+
+    /* 左转 = 左轮倒转、右轮正转（和 route_pivot 一致）*/
+    l = (int16_t)(-t);
+    r = t;
+    if (g_param.steer_inv != 0u) {
+        int16_t tmp = l;
+        l = r;
+        r = tmp;
+    }
+
+    BSP_Motor_SetSpeed(l, r);
+
+    t0 = HAL_GetTick();
+    while (s_abort == 0u) {
+        route_tick(0u);                     /* 维持系统：按键/蜂鸣/屏幕/支撑脚 */
+        APP_Car_PollEvents();               /* ★ 只采样+计数，不动电机 */
+
+        if (APP_Car_GetEventCount((uint8_t)APP_CAR_EVT_BLACK) != base) {
+            break;                          /* 全黑出现了 → 到位 */
+        }
+        if ((uint32_t)(HAL_GetTick() - t0) >= ROUTE_TURN_EVT_TIMEOUT_MS) {
+            BSP_Buzzer_BeepAsync(400u);     /* 长音：没等到，放弃 */
+            break;
+        }
+    }
+
+    BSP_Motor_Brake();                      /* 到位立刻刹住 */
+}
+
 void Route_TurnLeft(uint16_t ms)
 {
-    route_pivot(-1, ms, "TURN LEFT");
+    Route_Pivot(-1, g_param.pivot_spd, ms, "TURN LEFT");
 }
 
 void Route_TurnRight(uint16_t ms)
 {
-    route_pivot(1, ms, "TURN RIGHT");
+    Route_Pivot(1, g_param.pivot_spd, ms, "TURN RIGHT");
 }
 
 void Route_Servo(uint8_t deg)
@@ -735,6 +803,14 @@ uint8_t APP_Route_IsActive(void)
 void APP_Route_Abort(void)
 {
     s_abort = 1u;
+}
+
+void APP_Route_ClearAbort(void)
+{
+    /* ★ 给菜单里的"手动动作"（比如 TURN TEST）用：
+       如果上一次是在菜单里长按 K2 急停的，s_abort 会一直是 1，
+       后面所有的原语都会立刻返回 —— 这里清一下才好继续用。 */
+    s_abort = 0u;
 }
 
 /* ==========================================================================
@@ -1179,7 +1255,7 @@ void APP_Route_Run(void)
     }
 
     /* ============ step8：第 9 根线之后 → 循迹 3s → 右转 100°
-     *              → 盲走 3.5s（放脚）→ 倒车 3s → 左转 110° → 盲走 2s
+     *              → 盲走 3.5s（放脚）→ 倒车 3s → 左转 120° → 盲走 2s
      *              → 切回循迹 → 第 10 根线 → 急停，路线结束 ===========
      *
      * 时间轴（t = 0 就是 step7 循到第 9 根线的那一刻）：
@@ -1192,17 +1268,17 @@ void APP_Route_Run(void)
      *    t = 2.8s             支撑脚升回（放下 1.4 秒）
      *    t = 3.5s             盲走结束
      *    接着                 ★ 【倒车】3 秒（S8_REV_MS）
-     *    接着                 ★ 【左转】110°（TN7_ms ≈ 1.2 秒）
+     *    接着                 ★ 【左转】120°（TN7_ms ≈ 1.3 秒）
      *    接着                 ★ 再【盲走】2 秒（S8_BLIND3_MS）
      *    接着                 ★ 切回【循迹模式】，直到【第 10 根线】
      *    第10根线             → 急停，整条路线结束
      *
      *   ★ 两段盲走：右转后 S8_BLIND1_MS = 3.5 秒（这一段的 1.4s/2.8s 收放脚），
-     *              左转 110° 之后再盲走 S8_BLIND3_MS = 2 秒。
+     *              左转 120° 之后再盲走 S8_BLIND3_MS = 2 秒。
      *   ★ 倒车用 Route_Reverse()：两轮同速反转，走完自动停；
      *     倒车速度 = 基础速度 × ROUTE_REV_RATIO(0.7) —— 倒车不敢太快。
-     *   ★ 转弯参数：右转 100° 用 TN8_ms，倒车后的左转 110° 用 TN7_ms
-     *     （TN7_ms 原来是"第 2 次右转"，现在改成"左转"了）。
+     *   ★ 转弯参数：右转 100° 用 TN8_ms，倒车后的左转 120° 用 TN7_ms。
+     *   ★ 去掉了"转到全黑"那版（Route_TurnLeftUntilBlack 保留在文件里备用）。
      *   ★ 盲走/倒车期间【不计数】—— 所以最后等的"第 10 根线"是
      *     切回循迹之后重新开始数的那一根。 */
 #define S8_DOWN_MS       1400u      /* 盲走开始后第 1.4 秒：放下 */
@@ -1222,12 +1298,15 @@ void APP_Route_Run(void)
     Route_ServoAt((uint8_t)g_param.leg_up_deg,   S8_UP_MS);     /* t=4s 升回 */
     Route_Straight(S8_BLIND1_MS);           /* 盲走 5 秒 */
 
-    /* ---- ★ 倒车 2 秒（车尾往后退一段，代替原来的掉头）---- */
+    /* ---- ★ 倒车 3 秒（车尾往后退一段）---- */
     Route_Reverse(S8_REV_MS);
     Route_Beep2();
 
-    /* ---- ★ 左转 105° ---- */
-    Route_TurnLeft(g_param.rt_tn7_ms);      /* ★ 左转 110°（默认 1.2 秒）*/
+    /* ---- ★ 左转 120°（定时）----
+       ★ 2024 决定：这一步还是用定时转 ——
+         Route_TurnLeftUntilBlack()（转到全黑为止）那版留在本文件里没删，
+         以后想改成事件驱动，把这一行换回去即可。 */
+    Route_TurnLeft(g_param.rt_tn7_ms);      /* ★ 左转 120°（默认 1.3 秒）*/
     Route_Beep2();
 
     /* ---- ★ 再盲走 2 秒（转完之后再直冲一段）---- */

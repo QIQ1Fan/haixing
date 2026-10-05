@@ -107,6 +107,7 @@ typedef enum {
     MI_TUNE_PARAM,          /* → UI_PARAM_LIST */
     MI_ROUTE_TIME,          /* → UI_ROUTE_TIME：调试路线各段时长 */
     MI_LEG,                 /* → UI_LEG */
+    MI_TURN,                /* ★ → UI_TURN：设角度+速度转一下（标定转向）*/
     MI_SENSOR,              /* → UI_SENSOR */
     MI_SAVE,                /* → APP_Param_Save() */
     MI_LOAD_DEFAULT,        /* → APP_Param_ResetDefault() */
@@ -123,6 +124,7 @@ typedef enum {
     UI_START_STEP,          /* 从第几个阶段开始跑 */
     UI_ROUTE_TIME,          /* 路线各段时长（调试用） */
     UI_LEG,                 /* 支撑脚 */
+    UI_TURN,                /* ★ 转向标定：设角度 + 速度，转一次 */
     UI_SENSOR,              /* 传感器检查 */
     UI_INFO,                /* 关于 */
     UI_LIVE_TUNE            /* 行驶中实时调参 */
@@ -147,6 +149,7 @@ static const char *const s_menu_name[MI_NUM] = {
     "TUNE PARAMS",
     "ROUTE TIME",
     "SUPPORT LEG",
+    "TURN TEST",
     "SENSOR VIEW",
     "SAVE PARAMS",
     "LOAD DEFAULT",
@@ -204,6 +207,7 @@ static uint8_t  s_edit_back_page = 0xFFu;
 static uint8_t  s_step_mult = 1u;                   /* 步长倍率：短按 1，长按/连发 5 */
 
 static uint8_t  s_leg_sel   = 0u;                   /* 支撑脚页光标 0=DOWN 1=UP 2=BACK */
+static uint8_t  s_turn_sel  = 0u;                   /* 转向页光标 0=ANGLE 1=SPEED 2=DIR 3=GO */
 
 static uint8_t  s_live_sel  = 0u;                   /* 行驶中调参页：选中的是第几个参数 */
 static uint8_t  s_live_idx[MENU_LIVE_MAX];          /* 参数表里的真实索引 */
@@ -856,6 +860,104 @@ static void menu_draw_route_time(void)
 /* --------------------------------------------------------------------------
  * UI_LEG —— 支撑脚手动控制
  * -------------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+ * UI_TURN —— ★ 转向标定：设好【角度】和【速度】，按 GO 转一次
+ *   page0    标题
+ *   page1    ANGLE  xx deg
+ *   page2    SPEED  xxxx
+ *   page3    DIR    LEFT / RIGHT
+ *   page4    GO     (K1 执行)
+ *   page5    实际会转多久（算出来的，给标定参考）
+ *   page7    按键提示
+ *
+ * ★ 换算：时间(ms) = 角度 × MSpD / 10，MSpD 默认 111 = 11.1 ms/度。
+ *   实车量出真实角度后按  新MSpD = 旧MSpD × 目标角 / 实测角  修正，
+ *   以后这个工具转出来的角度就准了。
+ * -------------------------------------------------------------------------- */
+static void menu_draw_turn(void)
+{
+    uint16_t ms = (uint16_t)(((uint32_t)g_param.turn_ang * g_param.turn_mspd) / 10u);
+
+    BSP_OLED_DrawString(0u, 0u, "TURN TEST");
+
+    BSP_OLED_Printf(0u, 1u, "%cANGLE %u deg",
+                    (s_turn_sel == 0u) ? '>' : ' ', (unsigned int)g_param.turn_ang);
+    BSP_OLED_Printf(0u, 2u, "%cSPEED %u",
+                    (s_turn_sel == 1u) ? '>' : ' ', (unsigned int)g_param.turn_spd);
+    BSP_OLED_Printf(0u, 3u, "%cDIR   %s",
+                    (s_turn_sel == 2u) ? '>' : ' ',
+                    (g_param.turn_dir != 0u) ? "RIGHT" : "LEFT");
+    BSP_OLED_Printf(0u, 4u, "%cGO     (K1)", (s_turn_sel == 3u) ? '>' : ' ');
+
+    BSP_OLED_Printf(0u, 5u, "time = %u ms", (unsigned int)ms);
+
+    BSP_OLED_DrawString(0u, 7u, "K1:OK K2:BK K3/4:^v");
+}
+
+static uint8_t menu_key_turn(uint8_t key, uint8_t evt)
+{
+    (void)evt;
+
+    if ((key == (uint8_t)MKEY_PLUS) || (key == (uint8_t)MKEY_MINUS)) {
+        if (key == (uint8_t)MKEY_PLUS) {
+            s_turn_sel = (uint8_t)((s_turn_sel + 3u) % 4u);
+        } else {
+            s_turn_sel = (uint8_t)((s_turn_sel + 1u) % 4u);
+        }
+        return 1u;
+    }
+
+    if (key == (uint8_t)MKEY_BACK) {
+        s_page = (uint8_t)UI_MENU;
+        return 1u;
+    }
+
+    if (key == (uint8_t)MKEY_OK) {
+        if (s_turn_sel == 2u) {
+            g_param.turn_dir = (uint8_t)((g_param.turn_dir != 0u) ? 0u : 1u);
+            return 1u;
+        }
+
+        if (s_turn_sel == 3u) {
+            /* ---- ★ 执行：按 MSpD 把角度换算成时间，然后原地转 ---- */
+            uint16_t ms = (uint16_t)(((uint32_t)g_param.turn_ang * g_param.turn_mspd) / 10u);
+
+            if (ms < 50u) {
+                ms = 50u;                   /* 太短了电机根本不动 */
+            }
+            APP_Route_ClearAbort();     /* ★ 先清中止标志，否则上一次急停会一直挡着 */
+            if (g_param.turn_dir != 0u) {
+                Route_Pivot(1, (int16_t)g_param.turn_spd, ms, "CAL R");
+            } else {
+                Route_Pivot(-1, (int16_t)g_param.turn_spd, ms, "CAL L");
+            }
+            s_page = (uint8_t)UI_TURN;      /* 转完回本页，方便连续试 */
+            return 1u;
+        }
+
+        {
+            /* ANGLE / SPEED：直接借用现成的参数编辑页 */
+            uint8_t idx = 0xFFu;
+
+            if (s_turn_sel == 0u) {
+                idx = APP_Param_FindByName("TURNANG");
+            } else if (s_turn_sel == 1u) {
+                idx = APP_Param_FindByName("TURNSPD");
+            }
+
+            if (idx < g_param_count) {
+                s_edit_idx       = idx;
+                s_edit_orig      = APP_Param_GetByIndex(idx);
+                s_step_mult      = 1u;
+                s_edit_back_page = (uint8_t)UI_TURN;
+                s_page           = (uint8_t)UI_PARAM_EDIT;
+            }
+        }
+        return 1u;
+    }
+
+    return 0u;
+}
 static void menu_draw_leg(void)
 {
     static const char *const items[3] = { "EDIT UP", "EDIT DOWN", "BACK" };
@@ -1076,6 +1178,7 @@ static void menu_draw(void)
     case (uint8_t)UI_START_STEP: menu_draw_start_step(); break;
     case (uint8_t)UI_ROUTE_TIME: menu_draw_route_time(); break;
     case (uint8_t)UI_LEG:        menu_draw_leg();        break;
+    case (uint8_t)UI_TURN:       menu_draw_turn();       break;
     case (uint8_t)UI_SENSOR:     menu_draw_sensor();     break;
     case (uint8_t)UI_INFO:       menu_draw_info();       break;
     case (uint8_t)UI_LIVE_TUNE:  menu_draw_live();       break;
@@ -1219,6 +1322,11 @@ static uint8_t menu_key_menu(uint8_t key, uint8_t evt)
     case MI_LEG:
         s_page    = (uint8_t)UI_LEG;
         s_leg_sel = 0u;
+        break;
+
+    case MI_TURN:
+        s_turn_sel = 0u;
+        s_page     = (uint8_t)UI_TURN;
         break;
 
     case MI_SENSOR:
@@ -1570,6 +1678,7 @@ static uint8_t menu_dispatch(uint8_t key, uint8_t evt)
     case (uint8_t)UI_START_STEP: return menu_key_start_step(key, evt);
     case (uint8_t)UI_ROUTE_TIME: return menu_key_route_time(key, evt);
     case (uint8_t)UI_LEG:        return menu_key_leg(key, evt);
+    case (uint8_t)UI_TURN:       return menu_key_turn(key, evt);
     case (uint8_t)UI_SENSOR:     return menu_key_sensor(key, evt);
     case (uint8_t)UI_INFO:       return menu_key_info(key, evt);
     case (uint8_t)UI_LIVE_TUNE:  return menu_key_live(key, evt);

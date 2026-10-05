@@ -195,6 +195,7 @@ static uint16_t s_stall_acc   = 0u;         /* 堵转累计毫秒 */
 static uint16_t s_alert_acc   = 0u;         /* 报警蜂鸣节流 */
 static uint32_t s_run_ms      = 0u;         /* 本次启动已运行毫秒 */
 static uint8_t  s_pid_stale   = 0u;         /* 1 = 丢线期间没跑 PID，重新看到线时要复位一次 */
+static uint32_t s_evt_tick = 0u;     /* APP_Car_PollEvents 自己的节拍基准 */
 static uint32_t s_last_tick   = 0u;         /* 上一拍的时刻，用来量出真实 dt */
 static uint8_t  s_ramping     = 0u;         /* 1 = 还在起步斜坡里，见"速度规划"一节 */
 static uint8_t  s_alert_cnt   = 0u;         /* 报警已经响过几声（响够就不再响） */
@@ -471,6 +472,34 @@ const char *APP_Car_StateName(uint8_t state)
 /* ==========================================================================
  * 控制律 —— 全车最核心的 50 行
  * ========================================================================== */
+
+/* ★ 只【采样探头 + 推进事件计数】，不驱动电机。
+   给【原地转向直到某个循迹结果出现】这类原语用：
+   那时候电机是路线模块直接控制的，绝不能让 PID 插手。
+   用一个独立的节拍基准，免得打乱 APP_Car_Update 的 dt。 */
+void APP_Car_PollEvents(void)
+{
+    uint32_t now = HAL_GetTick();
+    uint32_t dt  = (uint32_t)(now - s_evt_tick);
+    uint8_t  mk;
+
+    s_evt_tick = now;
+    if (dt < 1u) {
+        dt = 1u;
+    }
+    if (dt > CAR_DT_MAX_MS) {
+        dt = CAR_DT_MAX_MS;
+    }
+
+    mk = BSP_Track_GetMask();
+    car_evt_update((uint8_t)APP_CAR_EVT_LEFT3,  mk, dt);
+    car_evt_update((uint8_t)APP_CAR_EVT_RIGHT3, mk, dt);
+    car_evt_update((uint8_t)APP_CAR_EVT_BLACK,  mk, dt);
+
+    s_st.cnt_left3  = s_evt[APP_CAR_EVT_LEFT3].cnt;
+    s_st.cnt_right3 = s_evt[APP_CAR_EVT_RIGHT3].cnt;
+    s_st.cnt_black  = s_evt[APP_CAR_EVT_BLACK].cnt;
+}
 
 void APP_Car_Update(void)
 {

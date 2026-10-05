@@ -695,8 +695,10 @@ extern "C" {
  *            step8 盲走第 2 段改回 3 秒，并在右转后新增 2.5 秒盲走
  *       31 = LF8_ms 4000 → 3000（step8 先循迹 3 秒）
  *       32 = TN7_ms 1100 → 1150（step8 第 2 次右转改成 105°）
- *       33 = TN7_ms 1150 → 1200（改成"倒车后的左转 110°"）*/
-#define PARAM_VERSION               33u
+ *       33 = TN7_ms 1150 → 1200（改成"倒车后的左转 110°"）
+ *       34 = TN7_ms 1200 → 1300（改成"倒车后的左转 120°"，回到定时转）
+ *       35 = 新增转向标定工具参数 TURNANG / TURNSPD / TURNDIR / MSpD */
+#define PARAM_VERSION               35u
 
 #ifdef __cplusplus
 }

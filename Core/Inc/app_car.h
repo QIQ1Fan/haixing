@@ -128,6 +128,14 @@ void APP_Car_ToggleRun(void);
   */
 void APP_Car_Update(void);
 
+/**
+ * @brief  只采样探头 + 推进循迹结果计数，【不驱动电机】
+ * @note   给【原地转向直到某个循迹结果出现】这类原语用：
+ *         那时电机由路线模块直接控制，PID 绝不能插手；
+ *         但事件计数还得继续跑（否则等不到结果）。
+ */
+void APP_Car_PollEvents(void);
+
 /** @brief 是否正在循迹行驶 */
 uint8_t APP_Car_IsRunning(void);
 
