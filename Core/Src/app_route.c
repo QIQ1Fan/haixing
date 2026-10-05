@@ -38,16 +38,16 @@
   *     step4②  下一次左三压线         → 盲走 STR_ms  → 左转 TN4_ms
   *     step4③  第 5 根横线            → 循迹 POST_ms → 左转 TN3_ms
   *     step5   第 6 根横线（台阶前）  → 盲走 UPST_ms（默认 9 s），期间舵机四拍
-  *     step6   第 7 根横线（不转向）  → 循迹 1.4 s → 盲走 3.5 s（t=2s 放脚 / t=3s 收回）
-  *                                      → 循到第 8 根线 → 循迹 POST3_ms(0.7 s) → 左转 TN5_ms(1 s)
+  *     step6   第 7 根横线（不转向）  → 循迹 2 s → 盲走 3.5 s（t=2s 放脚 / t=3s 收回）
+  *                                      → 循到第 8 根线 → 循迹 POST3_ms(0.7 s) → 左转 105°
   *     step7   左转转完后的循迹段      → 循迹 LF7_ms(0.7 s) → 舵机放下→升回 → 到"左路有线"
-  *                                      → 掉头 TN6_ms(2 s) → 循迹 0.7 s → 盲走 3.8 s（舵机放下→升回）
-  *                                      → 切回循迹 → 循到第 9 根线（不停，接 step8）
-  *     step8   第 9 根线之后          → 循迹 LF8_ms(3 s) → 右转 100° TN8_ms(1.1 s)
+  *                                      → 掉头 TN6_ms(2 s) → 循迹 0.7 s → 循迹 3.8 s（舵机放下→升回）
+  *                                      → 切回循迹 → 循到第 9 根线 → 再循迹 4.5 s（不停，接 step8）
+  *     step8   第 10 根线之后         → 循迹 LF8_ms(1.5 s) → 右转 100° TN8_ms(1.1 s)
   *                                      → 盲走 3.5 s（第 1.4s 舵机放下→第 2.8s 升回）
   *                                      → 倒车 S8_REV_MS(3 s) → 左转 120° TN7_ms(1.3 s)
   *                                      → 盲走 2 s
-  *                                      → 切回循迹 → 循到第 10 根线急停，路线结束
+  *                                      → 切回循迹 → 循到第 11 根线急停，路线结束
   *
   *   一共 5 次左转（含 2 次掉头 180°）、2 次右转、6 处舵机收放。
   *   所有时长都在菜单 ROUTE TIME 页里可调，不用重编。
@@ -594,6 +594,42 @@ void Route_TurnLeft(uint16_t ms)
     Route_Pivot(-1, g_param.pivot_spd, ms, "TURN LEFT");
 }
 
+/**
+ * @brief  按【角度】原地转向：时间(ms) = 角度 × MSpD / 10
+ * @param  deg 要转的角度（度）
+ * @param  spd 搓地速度；传 0 就用 g_param.pivot_spd
+ * @note   ★ MSpD 就是菜单 TURN TEST 页那个标定系数（默认 111 = 11.1 ms/度）。
+ *         好处：脚本里写【角度】而不是拍脑袋写毫秒，标定一次就准。
+ *         ★★ 注意：这个换算是【在某个速度下标定出来的】——
+ *            同一个角度，速度越快转得越多。所以标定 MSpD 时用的速度
+ *            最好和实际跑的速度一致（不一致就按比例折算一下）。
+ */
+void Route_TurnLeftDeg(uint16_t deg, int16_t spd)
+{
+    uint16_t ms = (uint16_t)(((uint32_t)deg * g_param.turn_mspd) / 10u);
+
+    if (spd == 0) {
+        spd = g_param.pivot_spd;
+    }
+    if (ms < 50u) {
+        ms = 50u;                       /* 太短了电机根本不动 */
+    }
+    Route_Pivot(-1, spd, ms, "TURN L deg");
+}
+
+void Route_TurnRightDeg(uint16_t deg, int16_t spd)
+{
+    uint16_t ms = (uint16_t)(((uint32_t)deg * g_param.turn_mspd) / 10u);
+
+    if (spd == 0) {
+        spd = g_param.pivot_spd;
+    }
+    if (ms < 50u) {
+        ms = 50u;
+    }
+    Route_Pivot(1, spd, ms, "TURN R deg");
+}
+
 void Route_TurnRight(uint16_t ms)
 {
     Route_Pivot(1, g_param.pivot_spd, ms, "TURN RIGHT");
@@ -901,7 +937,8 @@ static const uint16_t s_step_preset_black[ROUTE_STEP_NUM + 1u] = {
     8u,     /* 从第 7 步开始：step6 已经数到【第 8 根】了
                （所以预置 8 —— step7 最后要等的是第 9 根）*/
     9u      /* 从第 8 步开始：第 9 根已过（step7 结尾等的就是它），
-               本步不再等横线，直接开始循迹 5 秒 */
+               本步不再等横线，直接开始循迹 1.5 秒；
+               最后要等的是【第 11 根】（中间那段循迹会数到第 10 根）*/
 };
 
 /** 第 n 步的短名字（给"从哪一步开始"的菜单页显示用） */
@@ -1120,8 +1157,8 @@ void APP_Route_Run(void)
     Route_Beep2();
     }
 
-    /* ==== step6：第 7 根线【不转向】→ 循迹 1.4s → 盲走 3.5s（舵机收放）
-     *              → 循到第 8 根线 → 循迹 0.7s → 左转 1s ===============
+    /* ==== step6：第 7 根线【不转向】→ 循迹 2s → 盲走 3.5s（舵机收放）
+     *              → 循到第 8 根线 → 循迹 0.7s → 左转 105° ============
      *
      * ★★ 注意：第 7 根线【只是个信号，不转向】★★
      *   扫到第 7 根线之后车先循迹走一小段，然后切成【盲走】3.5 秒，
@@ -1131,13 +1168,13 @@ void APP_Route_Run(void)
      * 时间轴（t = 0 就是"扫到第 7 根线"的那一刻）：
      *
      *      t = 0s            第 7 根线（只是触发点，不转向）
-     *      t = 0 ~ 1.4s      循迹 1.4 秒（走到障碍跟前）
-     *      t = 1.4s          ★ 切【盲走】3.5 秒
-     *      t = 2.0s          ★ 支撑脚放下
+     *      t = 0 ~ 2s        循迹 2 秒（走到障碍跟前）
+     *      t = 2.0s          ★ 切【盲走】3.5 秒，同时支撑脚放下
+     *                        （循迹 2 秒正好走完，放脚和切盲走是同一刻）
      *      t = 3.0s          ★ 支撑脚升回（放下 1 秒）
-     *      t = 4.9s          盲走结束 → 切回【循迹】，直到扫到【第 8 根线】
+     *      t = 5.5s          盲走结束 → 切回【循迹】，直到扫到【第 8 根线】
      *      t = 第8根线       再循迹 POST3_ms(0.7 秒) 把车身摆正
-     *      然后              左转 TN5_ms(1 秒)
+     *      然后              左转 105°（速度 1500，按 MSpD 折算时间）
      *
      *   ★ 时间点全部写死在下面（想改节奏就改这三个数）：
      *       S6_DOWN_DELAY_MS = 测到第 7 根线之后【先循迹走多久】才切盲走，
@@ -1146,15 +1183,20 @@ void APP_Route_Run(void)
      *       S6_DOWN_AT_MS / S6_UP_AT_MS = 从第 7 根线算起，脚什么时候放下/收回。
      *   ★ 盲走期间【不计数】—— 这一段压到的横线不算，
      *     所以后面等的"第 8 根线"是盲走结束后重新开始数的那一根。 */
-#define S6_DOWN_DELAY_MS  1400u     /* ★ 测到第 7 根线后，先循迹走 1.4 秒 */
+#define S6_DOWN_DELAY_MS  2000u     /* ★ 测到第 7 根线后，先循迹走 2 秒 */
 #define S6_BLIND_MS       3500u     /* ★ 然后盲走 3.5 秒（舵机在这一段里收放）*/
 /* ★★ 舵机的两个时间点：从【第 7 根线】算起的绝对时刻（不是从盲走开始算）
-   —— 上面已经先循迹走了 S6_DOWN_DELAY_MS(1.4s)，所以预约时要减掉它。
+   —— 上面已经先循迹走了 S6_DOWN_DELAY_MS(2s)，所以预约时要减掉它。
    实车要挪动放脚位置就改这两个数：改小 = 更早放脚。 */
 #define S6_DOWN_AT_MS     2000u     /* t=2.0s 放下 */
 #define S6_UP_AT_MS       3000u     /* t=3.0s 升回（脚放下 1 秒）*/
 #define S6_SRV_DOWN_MS   (S6_DOWN_AT_MS - S6_DOWN_DELAY_MS)   /* = 600，相对盲走开始 */
 #define S6_SRV_UP_MS     (S6_UP_AT_MS   - S6_DOWN_DELAY_MS)   /* = 1600 */
+/* ★ step6 最后那个左转：按【角度】转，不再写毫秒。
+   角度→时间用菜单里的 MSpD 系数（TURN TEST 页标定），默认 11.1 ms/度，
+   所以 105° ≈ 1166 ms。速度 1500 比 PIVOT(1600) 稍慢一点。 */
+#define S6_TURN_DEG      105u       /* 左转角度（度）*/
+#define S6_TURN_SPD      1500       /* 左转速度 */
 
     if (s_from <= 6u) {
     Route_LineFollowUntilBlack(7u);         /* 扫到第 7 根线（只是触发，不转向）*/
@@ -1173,7 +1215,7 @@ void APP_Route_Run(void)
     /* ---- 切回循迹，循到【第 8 根线】，再循迹一小段把车身摆正，然后左转 ---- */
     Route_LineFollowUntilBlack(8u);
     Route_LineFollow(g_param.rt_post3_ms);  /* 过线后再循迹（默认 0.7 秒）*/
-    Route_TurnLeft(g_param.rt_tn5_ms);      /* 左转 1 秒 */
+    Route_TurnLeftDeg(S6_TURN_DEG, S6_TURN_SPD);   /* ★ 左转 105°，速度 1500 */
     Route_Beep2();
     }
 
@@ -1184,7 +1226,7 @@ void APP_Route_Run(void)
      *   舵机动作全部用"预约"（Route_ServoAt），登记完就返回 ——
      *   所以盲走/循迹都在继续走，不会停下来等舵机。
      *
-     * 时间轴（两段盲走都是 S7_BLIND_MS = 3.8 秒 ——
+     * 时间轴（两段都是【循迹】S7_LF_MS = 3.8 秒 ——
      *         第 1 段和【掉头回来】那段用的是同一个数；
      *         舵机【放下的时间点不变】—— 还是各自盲走一开始就放，
      *         放 1.4 秒后升回，所以升回之后车还会继续盲走 2.4 秒）：
@@ -1209,24 +1251,26 @@ void APP_Route_Run(void)
      *                                  按"90° ≈ 1000ms"估的默认 2000 ——
      *                                  ★ 实测转不够/转过头就改它；
      *                                    方向反了就把 Route_TurnLeft 换成 TurnRight
-     *   ★ 其余时间点写死在下面（S7_BLIND_MS / S7_DOWN_KEEP_MS / S7C_LF_MS）。
+     *   ★ 其余时间点写死在下面（S7_LF_MS / S7_DOWN_KEEP_MS / S7C_LF_MS）。
      *   ★ "左路有线"用 Route_LineFollowUntilNextLeft3() —— 等【下一次】左三压线，
      *     不写死"第几次"（左三在一趟里可能已经出现过好几次）。
-     *   ★ 盲走期间【不计数】—— 所以最后等的"第 9 根线"是
-     *     第 2 段盲走结束后重新开始数的那一根。 */
-#define S7_BLIND_MS      3800u      /* ★ 两段盲走都是 3.8 秒（第 1 段 + 掉头回来那段）*/
+     *   ★ 结尾：循到【第 9 根线】之后【再循迹 S7_TAIL_MS = 4.5 秒】，
+     *     然后不停车、直接接 step8 开头那段"循迹 3 秒"。 */
+#define S7_LF_MS         3800u      /* ★ 两段都是【循迹】3.8 秒（第 1 段 + 掉头回来那段）*/
+                                    /*   —— 原来是盲走，改成循迹了：车会跟着线走 */
 #define S7_DOWN_KEEP_MS  1400u      /* 脚放下之后 1.4 秒升回（两段时间点一样，
                                        放下的时刻 = 各自盲走开始那一刻）*/
 #define S7C_LF_MS         700u      /* 掉完头先循迹 0.7 秒 */
+#define S7_TAIL_MS       4500u      /* ★ 过第 9 根线之后再循迹 4.5 秒（接 step8）*/
 
     if (s_from <= 7u) {
-    /* ---- 第 1 段：循迹 1 秒 → 盲走 2 秒（第 1 次舵机收放在盲走里完成）---- */
+    /* ---- 第 1 段：循迹 0.7 秒 → 再循迹 3.8 秒（第 1 次舵机收放在这一段里完成）---- */
     Route_LineFollow(g_param.rt_lf7_ms);        /* 先循迹 1 秒 */
 
-    Route_ServoAt((uint8_t)g_param.leg_down_deg, 0u);             /* 盲走一开始就放下 */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, 0u);             /* 这一段的开头就放下 */
     Route_ServoAt((uint8_t)g_param.leg_up_deg, S7_DOWN_KEEP_MS);  /* 2 秒后升回 */
 
-    Route_Straight(S7_BLIND_MS);                /* ★ 盲走 5.5 秒（后 3.5 秒脚已收回）*/
+    Route_LineFollow(S7_LF_MS);                 /* ★ 循迹 3.8 秒（期间舵机收放）*/
 
     /* ---- 切回循迹，直到左路探头压到线 ---- */
     Route_LineFollowUntilNextLeft3();
@@ -1241,26 +1285,30 @@ void APP_Route_Run(void)
     /* ---- 再【盲走】5 秒，期间放第 2 次脚 ----
        ★ 盲走期间【不计数】—— 这一段压到的横线不算，
          所以后面等的"第 9 根线"是盲走结束后重新开始数的那一根。 */
-    Route_ServoAt((uint8_t)g_param.leg_down_deg, 0u);             /* 盲走一开始就放下 */
+    Route_ServoAt((uint8_t)g_param.leg_down_deg, 0u);             /* 这一段的开头就放下 */
     Route_ServoAt((uint8_t)g_param.leg_up_deg, S7_DOWN_KEEP_MS);  /* 2 秒后升回 */
-    Route_Straight(S7_BLIND_MS);            /* ★ 盲走 5.5 秒（后 3.5 秒脚已收回）*/
+    Route_LineFollow(S7_LF_MS);             /* ★ 循迹 3.8 秒（脚已收回）*/
 
-    /* ---- 盲走结束 → 回到循迹模式，循到【第 9 根线】 ----
+    /* ---- 回到循迹模式，先循到【第 9 根线】 ----
        （Route_LineFollowUntilBlack 内部会调 APP_Car_Start()，
          所以这一行本身就是切换回循迹模式）
-       ★ 这里【不再急停】—— 第 9 根线之后直接接 step8 继续跑。 */
+       ★ 这里【不再急停】。 */
     Route_LineFollowUntilBlack(9u);
+
+    /* ---- ★ 过了第 9 根之后再循迹 4.5 秒，然后直接接 step8 的"循迹 1.5 秒" ----
+       两段加起来就是 6 秒连续循迹，中间不打断。 */
+    Route_LineFollow(S7_TAIL_MS);
 
     Route_Beep2();
     }
 
-    /* ============ step8：第 9 根线之后 → 循迹 3s → 右转 100°
+    /* ============ step8：第 10 根线之后 → 循迹 1.5s → 右转 100°
      *              → 盲走 3.5s（放脚）→ 倒车 3s → 左转 120° → 盲走 2s
-     *              → 切回循迹 → 第 10 根线 → 急停，路线结束 ===========
+     *              → 切回循迹 → 第 11 根线 → 急停，路线结束 ===========
      *
-     * 时间轴（t = 0 就是 step7 循到第 9 根线的那一刻）：
+     * 时间轴（t = 0 就是 step7 循到第 9 根线、直接接着跑的那一刻）：
      *
-     *    t = 0 ~ 3s           循迹（时长 LF8_ms，默认 3000）
+     *    t = 0 ~ 1.5s         循迹（时长 LF8_ms，默认 1500）
      *    接着                 ★ 右转 100°（TN8_ms，默认 1100 ≈ 1.1 秒）
      *    ──────────── 下面 t 都从"右转转完"重新算 ────────────
      *    t = 0s               ★ 开始【盲走】3.5 秒（期间收放支撑脚）
@@ -1270,8 +1318,8 @@ void APP_Route_Run(void)
      *    接着                 ★ 【倒车】3 秒（S8_REV_MS）
      *    接着                 ★ 【左转】120°（TN7_ms ≈ 1.3 秒）
      *    接着                 ★ 再【盲走】2 秒（S8_BLIND3_MS）
-     *    接着                 ★ 切回【循迹模式】，直到【第 10 根线】
-     *    第10根线             → 急停，整条路线结束
+     *    接着                 ★ 切回【循迹模式】，直到【第 11 根线】
+     *    第11根线             → 急停，整条路线结束
      *
      *   ★ 两段盲走：右转后 S8_BLIND1_MS = 3.5 秒（这一段的 1.4s/2.8s 收放脚），
      *              左转 120° 之后再盲走 S8_BLIND3_MS = 2 秒。
@@ -1279,7 +1327,7 @@ void APP_Route_Run(void)
      *     倒车速度 = 基础速度 × ROUTE_REV_RATIO(0.7) —— 倒车不敢太快。
      *   ★ 转弯参数：右转 100° 用 TN8_ms，倒车后的左转 120° 用 TN7_ms。
      *   ★ 去掉了"转到全黑"那版（Route_TurnLeftUntilBlack 保留在文件里备用）。
-     *   ★ 盲走/倒车期间【不计数】—— 所以最后等的"第 10 根线"是
+     *   ★ 盲走/倒车期间【不计数】—— 所以最后等的"第 11 根线"是
      *     切回循迹之后重新开始数的那一根。 */
 #define S8_DOWN_MS       1400u      /* 盲走开始后第 1.4 秒：放下 */
 #define S8_UP_MS         2800u      /* 第 2.8 秒：升回（放下 1.4 秒）*/
@@ -1288,7 +1336,7 @@ void APP_Route_Run(void)
 #define S8_REV_MS        3000u      /* ★ 倒车 3 秒（速度 = 基础速度 × 0.7）*/
 
     if (s_from <= 8u) {
-    Route_LineFollow(g_param.rt_lf8_ms);    /* 循迹（默认 3 秒）*/
+    Route_LineFollow(g_param.rt_lf8_ms);    /* 循迹（默认 1.5 秒）*/
 
     Route_TurnRight(g_param.rt_tn8_ms);     /* ★ 第 1 次右转 100°（默认 1.1 秒）*/
     Route_Beep2();
@@ -1312,11 +1360,11 @@ void APP_Route_Run(void)
     /* ---- ★ 再盲走 2 秒（转完之后再直冲一段）---- */
     Route_Straight(S8_BLIND3_MS);
 
-    /* ---- ★ 切回【循迹模式】，直到【第 10 根线】→ 急停，路线结束 ----
+    /* ---- ★ 切回【循迹模式】，直到【第 11 根线】→ 急停，路线结束 ----
        （Route_LineFollowUntilBlack 内部会调 APP_Car_Start()，
          所以这一行本身就是"切回循迹模式"）*/
-    Route_LineFollowUntilBlack(10u);
-    Route_Brake();                          /* ★ 第 10 根线到了，立刻刹住 */
+    Route_LineFollowUntilBlack(11u);
+    Route_Brake();                          /* ★ 第 11 根线到了，立刻刹住 */
 
     Route_Beep2();
     }

@@ -193,7 +193,7 @@ APP_Param_t g_param;
  * 实测转不够/转过头就改这个数 */
 #define DEF_RT_TN6_MS       2000
 /* step8：第 9 根线之后先循迹 5 秒，再右转 1 秒 */
-#define DEF_RT_LF8_MS       3000
+#define DEF_RT_LF8_MS       1500
 #define DEF_RT_TN7_MS       1300        /* step8 倒车之后的【左转】120°（按 100°=1100ms 折算）*/
 /* ---- 转向标定工具（菜单 TURN TEST 页）---- */
 #define DEF_TURN_ANG        90          /* 要转的角度（度）*/

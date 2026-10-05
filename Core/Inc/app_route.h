@@ -191,6 +191,13 @@ void Route_TurnLeft(uint16_t ms);
  */
 void Route_Pivot(int8_t dir, int16_t spd, uint16_t ms, const char *name);
 
+/**
+ * @brief  按【角度】原地转向：时间 = 角度 × MSpD / 10（MSpD 见菜单 TURN TEST）
+ * @param  deg 角度（度）；spd 搓地速度（传 0 就用 PIVOT）
+ */
+void Route_TurnLeftDeg(uint16_t deg, int16_t spd);
+void Route_TurnRightDeg(uint16_t deg, int16_t spd);
+
 /** @brief 原地左转，直到八路探头【全部压线（全黑）】才停（事件驱动，比定时准） */
 void Route_TurnLeftUntilBlack(void);
 
