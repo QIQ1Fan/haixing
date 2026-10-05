@@ -136,6 +136,17 @@ void APP_Car_Update(void);
  */
 void APP_Car_PollEvents(void);
 
+/**
+ * @brief  ★ 临时车速：spd > 0 时 PID 用这个值当基础速度（不用菜单的 BASESPD）
+ * @note   给路线脚本"某一段跑慢一点"用；只影响行驶，不改参数、不存 Flash。
+ *         传 0 或调 APP_Car_ClearSpeedOverride() 就恢复正常车速。
+ */
+void APP_Car_SetSpeedOverride(int16_t spd);
+void APP_Car_ClearSpeedOverride(void);
+
+/** @brief 当前生效的基础速度（有覆盖就是覆盖值，否则是 BASESPD）*/
+int16_t APP_Car_GetBaseSpeed(void);
+
 /** @brief 是否正在循迹行驶 */
 uint8_t APP_Car_IsRunning(void);
 

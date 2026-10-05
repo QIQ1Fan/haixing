@@ -90,7 +90,7 @@
 #define MENU_ROWS           6u      /* 主菜单 / 参数列表一屏能显示几行（page1..6） */
 #define MENU_LIVE_ROWS      4u      /* 行驶中调参页一屏几行（page1..4） */
 #define MENU_LIVE_MAX       6u      /* 行驶中调参最多放几个参数 */
-#define MENU_RT_NUM         17u     /* ROUTE TIME 页最多放几项（现在 16 项，超一屏会滚动）*/
+#define MENU_RT_NUM         18u     /* ROUTE TIME 页最多放几项（现在 16 项，超一屏会滚动）*/
 #define MENU_RT_ROWS        6u      /* 一屏显示几行（page1..6）*/
 #define MENU_VAL_X          66u     /* 列表里"值"的列（名字最长 8 字符 = 60 像素）*/
 
@@ -171,7 +171,8 @@ static const char *const s_menu_name[MI_NUM] = {
 static const char *const s_rt_name[MENU_RT_NUM] = {
     "BLD1_ms", "POST_ms", "TN1_ms", "BLD2_ms", "POST2_ms", "TN2_ms",
     "TN3_ms", "TN4_ms", "STR_ms", "UPST_ms",
-    "POST3_ms", "TN5_ms", "LF7_ms", "TN6_ms", "LF8_ms", "TN7_ms", "TN8_ms"
+    "POST3_ms", "TN5_ms", "LF7_ms", "TN6_ms", "LF8_ms", "TN7_ms", "TN8_ms",
+    "TN9_ms"
 };
 static uint8_t s_rt_idx[MENU_RT_NUM];       /* 参数表里的真实索引 */
 static uint8_t s_rt_cnt = 0u;               /* 实际找到几项 */

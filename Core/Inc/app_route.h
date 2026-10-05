@@ -163,6 +163,13 @@ void Route_LineFollowUntilNextLeft3(void);
 /** @brief 倒车 ms 毫秒（两轮同速反转，不看线） */
 void Route_Reverse(uint16_t ms);
 
+/**
+ * @brief ★ 临时改车速（这一段跑慢/快一点），立刻生效；传 0 = 恢复 BASESPD
+ * @note  只影响行驶，不改菜单参数、不存 Flash。
+ */
+void Route_SetSpeed(int16_t spd);
+void Route_SpeedRestore(void);
+
 /** @brief 循线直到"全黑（横线）"【下一次】出现（不关心是第几根） */
 void Route_LineFollowUntilNextBlack(void);
 

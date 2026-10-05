@@ -188,7 +188,7 @@ APP_Param_t g_param;
 /* step7：先循迹走多久再放舵机（也是"舵机放下"的时间点）。
  * 放下 = LF7_ms，升回 = LF7_ms + 2000（间隔写死在 app_route.c 的 S7_DOWN_GAP_MS），
  * 之后继续循迹直到左路压线。 */
-#define DEF_RT_LF7_MS        700
+#define DEF_RT_LF7_MS       1000
 /* step7 的掉头（原地转 180°）。按"90° ≈ 1000ms"估的 2000，
  * 实测转不够/转过头就改这个数 */
 #define DEF_RT_TN6_MS       2000
@@ -200,7 +200,8 @@ APP_Param_t g_param;
 #define DEF_TURN_SPD        1600        /* 这个工具用的转向速度 */
 #define DEF_TURN_DIR        0u          /* 0 = 左转 */
 #define DEF_TURN_MSPD       111         /* ★ 11.1 ms/度（×10 存）：1000ms ≈ 90° */
-#define DEF_RT_TN8_MS       1100        /* step8 第 1 次右转：目标 100°（按 1000ms≈90° 折算）*/
+#define DEF_RT_TN9_MS       1000        /* step8 结尾右转（接 step9）*/
+#define DEF_RT_TN8_MS       1300        /* step8 第 1 次右转：目标 120°（按 1000ms≈90° 折算）*/
 #define DEF_RT_UPST_MS       9000
 
 #define DEF_LEG_UP_DEG      0           /* 全收起 */
@@ -276,6 +277,7 @@ const APP_ParamItem_t g_param_table[] = {
     { "LF8_ms",   offsetof(APP_Param_t, rt_lf8_ms),    PTYPE_U16,  0, 100.0f,    0.0f, 30000.0f },
     { "TN7_ms",   offsetof(APP_Param_t, rt_tn7_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     { "TN8_ms",   offsetof(APP_Param_t, rt_tn8_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
+    { "TN9_ms",   offsetof(APP_Param_t, rt_tn9_ms),    PTYPE_U16,  0,  50.0f,    0.0f, 10000.0f },
     /* --------------------- 转向标定工具 ------------------------------- */
     { "TURNANG",  offsetof(APP_Param_t, turn_ang),     PTYPE_U16,  0,   5.0f,    0.0f,  360.0f },
     { "TURNSPD",  offsetof(APP_Param_t, turn_spd),     PTYPE_U16,  0, 100.0f,    0.0f, 3599.0f },
@@ -404,6 +406,7 @@ static void param_fill_default(APP_Param_t *p)
     p->turn_dir    = (uint8_t)DEF_TURN_DIR;
     p->turn_mspd   = (uint16_t)DEF_TURN_MSPD;
     p->rt_tn8_ms   = (uint16_t)DEF_RT_TN8_MS;
+    p->rt_tn9_ms   = (uint16_t)DEF_RT_TN9_MS;
     p->rt_upst_ms = (uint16_t)DEF_RT_UPST_MS;
 
     p->leg_up_deg   = (uint8_t)DEF_LEG_UP_DEG;

@@ -191,6 +191,7 @@ static void car_evt_update(uint8_t ch, uint8_t mask, uint16_t dt_ms)
     }
 }
 static uint16_t s_cross_acc   = 0u;         /* 全黑累计毫秒 */
+static int16_t  s_spd_override = 0;         /* ★ >0 时临时顶替 BASESPD（路线脚本用）*/
 static uint16_t s_stall_acc   = 0u;         /* 堵转累计毫秒 */
 static uint16_t s_alert_acc   = 0u;         /* 报警蜂鸣节流 */
 static uint32_t s_run_ms      = 0u;         /* 本次启动已运行毫秒 */
@@ -477,6 +478,24 @@ const char *APP_Car_StateName(uint8_t state)
    给【原地转向直到某个循迹结果出现】这类原语用：
    那时候电机是路线模块直接控制的，绝不能让 PID 插手。
    用一个独立的节拍基准，免得打乱 APP_Car_Update 的 dt。 */
+/* ★ 临时车速：spd > 0 时，PID 用这个值当基础速度，不用菜单里的 BASESPD。
+   给路线脚本"某一段跑慢一点"用（比如过某个障碍段用 2100）。
+   只影响行驶，不改参数、不会存 Flash。 */
+void APP_Car_SetSpeedOverride(int16_t spd)
+{
+    s_spd_override = (spd > 0) ? spd : 0;
+}
+
+void APP_Car_ClearSpeedOverride(void)
+{
+    s_spd_override = 0;
+}
+
+int16_t APP_Car_GetBaseSpeed(void)
+{
+    return (s_spd_override > 0) ? s_spd_override : g_param.base_speed;
+}
+
 void APP_Car_PollEvents(void)
 {
     uint32_t now = HAL_GetTick();
@@ -668,7 +687,13 @@ void APP_Car_Update(void)
     }
 
     /* ---- ⑥ 基础速度规划 ---- */
-    base = (float)g_param.base_speed;
+    /* ★ 路线脚本可以用 APP_Car_SetSpeedOverride() 临时改车速（比如过某段用 2100），
+       只影响跑车、不动菜单里的 BASESPD 参数，用完 Clear 就回正常值 */
+    if (s_spd_override > 0) {
+        base = (float)s_spd_override;
+    } else {
+        base = (float)g_param.base_speed;
+    }
 
     if ((g_param.ramp_ms > 0u) && (s_run_ms < (uint32_t)g_param.ramp_ms)) {
         /* 起步斜坡：从 0 线性爬到 BASE SPD。
