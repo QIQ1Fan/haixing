@@ -48,6 +48,37 @@ static int32_t  s_total[ENC_NUM];   /* 累计计数（累加增量，不受回�
 static uint32_t s_last_tick = 0u;   /* 上次采样时的 HAL_GetTick() */
 static uint16_t s_dt_ms = 0u;       /* 上一次采样实际经过的毫秒数 */
 
+/* ★★ 左右编码器【软件对调】开关（菜单参数 ENCSWAP 每拍刷进来）
+ *
+ *   接线时两个编码器的插头很容易左右插反（现象：转左轮 → 右轮读数在变）。
+ *   左右反了之后：循迹、转向、堵转保护【都不受影响】，
+ *   但 ① 屏幕上的 rpm / dist 左右是反的；
+ *       ② 一旦上【编码器闭环】（比如全黑时靠编码器走直），
+ *          就会变成【正反馈】—— 读到的是另一个轮子，越纠越偏。
+ *
+ *   所以这里做一个逻辑层映射：上层说【左轮】就是真的左轮，
+ *   底下换成哪一路由这个开关决定。不改线、菜单里一拨就好。
+ *   （索引仍是 BSP_EncId_t：ENC_LEFT = 0 / ENC_RIGHT = 1）
+ */
+static uint8_t s_swap = 0u;         /* 1 = 左右接反了，读的时候对调 */
+
+void BSP_Encoder_SetSwap(uint8_t swap)
+{
+    s_swap = (swap != 0u) ? 1u : 0u;
+}
+
+/** 逻辑 id → 物理数组下标（对调开关在这里生效）*/
+static uint8_t enc_idx(BSP_EncId_t id)
+{
+    if (id >= ENC_NUM) {
+        return 0xFFu;               /* 非法：调用方判掉 */
+    }
+    if (s_swap != 0u) {
+        return (uint8_t)((id == ENC_LEFT) ? (uint8_t)ENC_RIGHT : (uint8_t)ENC_LEFT);
+    }
+    return (uint8_t)id;
+}
+
 /* 方向反相标记，索引与 BSP_EncId_t 一一对应。
    编译期常量，用 #if 在编译时就定下来，不占运行期判断。 */
 static const uint8_t s_invert[ENC_NUM] = {
@@ -209,12 +240,16 @@ void BSP_Encoder_Update(void)
 
 int16_t BSP_Encoder_GetDelta(BSP_EncId_t id)
 {
-    return (id < ENC_NUM) ? s_delta[id] : 0;
+    uint8_t i = enc_idx(id);
+
+    return (i != 0xFFu) ? s_delta[i] : 0;
 }
 
 int32_t BSP_Encoder_GetTotal(BSP_EncId_t id)
 {
-    return (id < ENC_NUM) ? s_total[id] : 0;
+    uint8_t i = enc_idx(id);
+
+    return (i != 0xFFu) ? s_total[i] : 0;
 }
 
 float BSP_Encoder_GetRPM(BSP_EncId_t id)
@@ -222,9 +257,12 @@ float BSP_Encoder_GetRPM(BSP_EncId_t id)
     float counts_per_sec;
     float rev_per_sec;
 
-    if (id >= ENC_NUM) {
+    uint8_t i = enc_idx(id);
+
+    if (i == 0xFFu) {
         return 0.0f;
     }
+    id = (BSP_EncId_t)i;            /* ★ 走映射后的物理通道 */
 
     /* 第一步：增量 → 每秒计数。
        乘 1000 再除以"实测间隔(ms)"，把"这段时间里多少个计数"换成

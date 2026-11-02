@@ -560,6 +560,9 @@ void APP_Car_Update(void)
        在 SENSOR CHECK 页能马上看到方框对没对） */
     BSP_Track_SetActiveLow(g_param.act_low);
 
+    /* ★ 编码器左右对调也每拍同步：菜单里一拨立刻生效，不用重启 */
+    BSP_Encoder_SetSwap(g_param.enc_swap);
+
     /* 遥测每拍都刷新（待机时屏幕上也有转速看） */
     car_refresh_telemetry();
 

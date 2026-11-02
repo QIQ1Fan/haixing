@@ -200,6 +200,8 @@ APP_Param_t g_param;
 #define DEF_TURN_SPD        1600        /* 这个工具用的转向速度 */
 #define DEF_TURN_DIR        0u          /* 0 = 左转 */
 #define DEF_TURN_MSPD       111         /* ★ 11.1 ms/度（×10 存）：1000ms ≈ 90° */
+/* 编码器左右对调：★ 本车实测插头是反的（转左轮动的是右轮读数），所以默认 1 */
+#define DEF_ENC_SWAP        1u
 #define DEF_RT_TN9_MS       1000        /* step8 结尾右转（接 step9）*/
 #define DEF_RT_TN8_MS       1300        /* step8 第 1 次右转：目标 120°（按 1000ms≈90° 折算）*/
 #define DEF_RT_UPST_MS       9000
@@ -283,6 +285,8 @@ const APP_ParamItem_t g_param_table[] = {
     { "TURNSPD",  offsetof(APP_Param_t, turn_spd),     PTYPE_U16,  0, 100.0f,    0.0f, 3599.0f },
     { "TURNDIR",  offsetof(APP_Param_t, turn_dir),     PTYPE_U8,   0,   1.0f,    0.0f,    1.0f },
     { "MSpD",     offsetof(APP_Param_t, turn_mspd),    PTYPE_U16,  0,   1.0f,   20.0f,  400.0f },
+    /* ------------------------------ 编码器 ------------------------------ */
+    { "ENCSWAP",  offsetof(APP_Param_t, enc_swap),     PTYPE_U8,   0,   1.0f,    0.0f,    1.0f },
     /* ------------------------------ 支撑脚 ------------------------------ */
     /* ★ 支撑脚两个角度的步长是 1 度（其它参数是 5 或更大）：
        角度是"看着机械位置一点点试出来"的，5 度一跳太粗，
@@ -405,6 +409,7 @@ static void param_fill_default(APP_Param_t *p)
     p->turn_spd    = (uint16_t)DEF_TURN_SPD;
     p->turn_dir    = (uint8_t)DEF_TURN_DIR;
     p->turn_mspd   = (uint16_t)DEF_TURN_MSPD;
+    p->enc_swap    = (uint8_t)DEF_ENC_SWAP;
     p->rt_tn8_ms   = (uint16_t)DEF_RT_TN8_MS;
     p->rt_tn9_ms   = (uint16_t)DEF_RT_TN9_MS;
     p->rt_upst_ms = (uint16_t)DEF_RT_UPST_MS;

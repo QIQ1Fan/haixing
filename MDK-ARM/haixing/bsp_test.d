@@ -31,6 +31,7 @@ haixing\bsp_test.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V
 haixing\bsp_test.o: C:/Users/administered/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.7/Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h
 haixing\bsp_test.o: ../Core/Inc/bsp_motor.h
 haixing\bsp_test.o: ../Core/Inc/bsp_track.h
+haixing\bsp_test.o: ../Core/Inc/bsp_encoder.h
 haixing\bsp_test.o: ../Core/Inc/bsp_buzzer.h
 haixing\bsp_test.o: ../Core/Inc/bsp_uart.h
 haixing\bsp_test.o: ../Core/Inc/app_param.h

@@ -700,8 +700,10 @@ extern "C" {
  *       35 = 新增转向标定工具参数 TURNANG / TURNSPD / TURNDIR / MSpD
  *       36 = LF8_ms 3000 → 1500（step8 先循迹 1.5 秒）
  *       37 = 增加 TN9_ms（step8 结尾右转）；新增 step9
- *       38 = TN8_ms 1100 → 1300（step8 第 1 次右转改 120°）*/
-#define PARAM_VERSION               39u
+ *       38 = TN8_ms 1100 → 1300（step8 第 1 次右转改 120°）
+ *    39/40 = 提速：BASESPD → 3200、PIVOT → 2500（实验里用过这两个号）
+ *       42 = 新增 ENCSWAP（编码器左右软件对调）—— 结构体加字段，必须换号 */
+#define PARAM_VERSION               42u
 
 #ifdef __cplusplus
 }

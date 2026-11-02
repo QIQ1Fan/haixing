@@ -102,6 +102,15 @@ float BSP_Encoder_GetSpeedMMps(BSP_EncId_t id, float wheel_diameter_mm);
   */
 void BSP_Encoder_Reset(void);
 
+/**
+ * @brief  ★ 左右编码器【软件对调】：swap != 0 时，读 ENC_LEFT 拿到的是右轮计数
+ * @note   给【插头左右插反】的情况用：不改线，菜单里一拨就好。
+ *         循迹/转向/堵转保护都不受影响，但【上编码器闭环前必须拨对】——
+ *         反了会变成正反馈，越纠越偏。
+ *         由 APP_Car_Update() 每拍从参数刷进来。
+ */
+void BSP_Encoder_SetSwap(uint8_t swap);
+
 #ifdef __cplusplus
 }
 #endif
